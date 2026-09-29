@@ -35,10 +35,10 @@
 - `scripts/probe-runtime.ts`：真实本地插件/MCP/Skill、独立会话交办及返回、插件禁用、Skill 旁路/实验/正常恢复。指定 `BRO_PROBE_BROWSER` 后，在独立 Chrome profile 中填表、点击并读回真实页面结果；本机已通过。
 - `scripts/probe-controls.ts`：真实 provider 请求顺序 `FIRST → STEER → SECOND`；steer 批注进入历史；stop 中断请求且持久状态为 cancelled。手动压缩期间新输入仍排队，运行中关闭宿主会收拢执行进程；OMP 上下文统计可读。
 - `scripts/probe-memory.ts`：实际 OMP + Mnemopi 自动保存、跨新会话检索和注入、关闭后新会话不注入。此探针使用原生 FTS-only、`llmMode=none` 配置；默认多语言 embedding 和抽取模型尚未验收。
-- `scripts/probe-desktop.ts`：从 GUI 填写 API、实际写入中文空格文件名、提交批注、执行期间关窗、后台完成、重开恢复。源码启动和 `.app` 启动均已通过，后者使用包内 Bun。
+- `scripts/probe-desktop.ts`：从 GUI 填写 API、实际写入中文空格文件名、提交批注、执行期间关窗、后台完成、重开恢复；草稿在重启后保留且按会话隔离。源码启动和 `.app` 启动均已通过；最终 `.app` 验证将工作目录移到应用内、PATH 限制为系统目录，并清除 Bun/开发页面覆盖，实际使用包内 Bun。
 - macOS 原生探针结果：Quartz、capture=true/granted、input=false/denied、AX=false/denied；Swift 监听器成功编译，预检返回“需要在系统设置中授予输入监控权限”。没有绕过权限，也未将此项标为通过。
 
-2026-09-29 本机证据目录：`/var/folders/yq/71gby3lj03d7ndwm99jbdd240000gn/T/bro-runtime-probe-ya4sqG`、`bro-controls-fLTwaG`、`bro-memory-probe-RZElUb`（同一临时父目录）。源码探针和测试是可重复的证据入口；临时目录可能被系统清理。
+2026-09-29 本机证据目录：`/var/folders/yq/71gby3lj03d7ndwm99jbdd240000gn/T/bro-runtime-probe-ya4sqG`、`bro-controls-fLTwaG`、`bro-memory-probe-RZElUb`、`bro-desktop-probe-NkHxDX`（同一临时父目录）。源码探针和测试是可重复的证据入口；临时目录可能被系统清理。
 
 交付文件位于 `out/macos-arm64/bro.app` 和 `out/macos-arm64/bro-macos.zip`，不提交二进制与测试数据到 Git。代码提交在 `codex/initial-desktop`；本轮用户提供的协作约束禁止直接合入目标分支，因此不创建或合并 PR。
 

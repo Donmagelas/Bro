@@ -155,9 +155,10 @@ svg {
   font-weight: 500;
 }
 .section-label button {
-  width: 22px;
+  min-width: 22px;
   height: 22px;
   border-radius: 4px;
+  white-space: nowrap;
 }
 .section-label > span {
   font-size: 10px;

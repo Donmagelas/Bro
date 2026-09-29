@@ -905,6 +905,8 @@ function SettingsPanel({
     baseUrl: "https://api.openai.com/v1",
     apiKey: "",
     model: "",
+    contextWindow: "128000",
+    maxTokens: "16384",
     api: "openai-completions",
     imageInput: true,
     reasoning: true,
@@ -1004,6 +1006,8 @@ function SettingsPanel({
                           baseUrl: c.baseUrl || "",
                           apiKey: "",
                           model: c.model,
+                          contextWindow: String(c.contextWindow),
+                          maxTokens: String(c.maxTokens),
                           api: c.api || "openai-completions",
                           imageInput: c.imageInput,
                           reasoning: c.reasoning,
@@ -1214,6 +1218,16 @@ function SettingsPanel({
                       </option>
                     </select>
                   </label>
+                  <Field
+                    label="上下文窗口 tokens"
+                    value={connection.contextWindow}
+                    onChange={(v) => update("contextWindow", v)}
+                  />
+                  <Field
+                    label="最大输出 tokens"
+                    value={connection.maxTokens}
+                    onChange={(v) => update("maxTokens", v)}
+                  />
                   <label className="check">
                     <input
                       type="checkbox"
