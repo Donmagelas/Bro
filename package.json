@@ -1,0 +1,47 @@
+{
+  "name": "bro",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A local agent workbench for macOS and Windows",
+  "main": "apps/desktop/main.cjs",
+  "packageManager": "bun@1.4.2",
+  "engines": {
+    "bun": ">=1.4.2"
+  },
+  "scripts": {
+    "dev": "bun scripts/dev.ts",
+    "host": "bun apps/host/main.ts",
+    "build": "vite build",
+    "start": "electron .",
+    "check": "tsc --noEmit",
+    "test": "bun test tests",
+    "probe:omp": "bun scripts/probe-omp.ts",
+    "package": "bun run build && bun scripts/package.ts",
+    "probe:runtime": "bun scripts/probe-runtime.ts",
+    "probe:desktop": "bun run build && bun scripts/probe-desktop.ts",
+    "probe:controls": "bun scripts/probe-controls.ts",
+    "format": "prettier --write apps packages scripts tests package.json tsconfig.json vite.config.ts",
+    "probe:memory": "bun scripts/probe-memory.ts"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "1.74.0",
+    "@oh-my-pi/pi-coding-agent": "18.4.3",
+    "@oh-my-pi/pi-ai": "18.4.3",
+    "@sinclair/typebox": "0.34.41",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.2",
+    "@types/react": "19.2.0",
+    "@types/react-dom": "19.2.0",
+    "electron": "44.4.5",
+    "prettier": "3.6.2",
+    "puppeteer-core": "25.3.0",
+    "typescript": "5.9.3",
+    "vite": "8.3.1"
+  }
+}

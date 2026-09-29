@@ -1,46 +1,81 @@
 # bro
 
-面向 macOS 和 Windows 的个人 Agent 工作台。产品中只有一个 bro，用户通过不同会话处理任务，也可以通过飞书与本机 Peer 连接这些会话。
+面向 macOS 和 Windows 的个人 Agent 工作台：一个 bro，多个会话。桌面布局参考 Codex；飞书、Peer 和本机事件通过独立后台进入会话队列。
 
-首版需求、主体架构及实施方案已形成，目前尚未开始功能实现，没有可运行应用或安装包。
+目前是 **0.1 开发版**。macOS Apple Silicon 的应用包、GUI 配置、真实 OMP 工具执行、跨会话交办和关窗后的后台运行已验证。真实模型账号、飞书收发、原生桌面权限、Mnemopi 和 Windows 尚有验收缺口，详见 [实施进度](docs/changes/agent-workbench/implementation.md) 和 [待处理事项](docs/changes/agent-workbench/open-issues.md)。
 
-GUI 风格与排版参考 Codex 桌面版，按 bro 已确认的功能范围组织项目/会话侧栏、主对话区、底部输入区及按需展开的辅助面板。
+## 运行
 
-## 已确定的架构
+源码开发需要 Bun 1.4.2，建议另装 Git。项目自带固定版本 OMP 18.4.3 和 Electron 44.4.5。
 
-| 部分 | 职责 |
-| --- | --- |
-| Electron GUI | 项目与会话、文件与结果、设置、排队/steer/停止及桌面接管 |
-| 独立 Bun 后台宿主 | Monitor、消息路由、持久队列、跨会话协作、运行进程管理与桌面协调 |
-| OMP SDK 会话运行进程 | 按需独立运行，执行模型与工具，复用 Computer Use 和记忆能力 |
+```sh
+bun install --frozen-lockfile
+bun run dev
+```
 
-安装包将包含匹配的运行时与依赖。关闭窗口后，后台服务和正在执行的任务继续运行。
+生产界面：
 
-## 功能范围
+```sh
+bun run build
+bun run start
+```
 
-- ChatGPT 账号登录，以及 API Key + 自定义 Base URL。
-- 模型与推理强度选择、上下文用量及费用显示。
-- 本机开发工作、Skills、MCP、浏览器及原生桌面操作。
-- 复用 OMP 本地/Git 插件管理，以及 Hashline/AST、LSP、DAP、持久 Python/JS 工具能力。
-- 在 Codex 桌面端的指定会话中发送消息并读回回复，作为外部应用场景单独验收。
-- 通用 Monitor；首版 IM 接入飞书，保留 Peer 等本机事件来源。
-- 受信任名单；私聊与群聊 @ 按入口绑定到会话，支持跨会话查询与交办。
-- 普通聊天及新建飞书会话使用默认工作目录；一个项目对应一个目录，支持会话重命名和置顶。
-- GUI 支持排队、steer 和停止；非 GUI 消息统一排队。
-- 沿用 OMP 默认 `yolo`，不增加 bro 的逐工具确认；系统权限与工具显式规则仍有效。
-- 桌面操作支持用户接管后自动暂停、手动继续。
-- 对话文字批注。
-- 记忆暂定复用 Mnemopi，提供 on/off。
-- Skill 选择、上下文选择与压缩支持可关闭的实验实现。
+进入「设置与连接 → 模型」，选择 ChatGPT 登录，或填写 API Key、Base URL、模型 ID 与协议。运行中的会话可排队、steer、停止。普通聊天默认使用 bro 自己的数据目录，不会默认读取已有 pi/OMP/Codex 的会话和账号配置。
 
-微信、执行沙箱及官方托管连接器/云端执行不在首版范围。
+若下载 Electron 失败，可执行 `node node_modules/electron/install.js`；网络环境需要时可自行设置 `ELECTRON_MIRROR`。开发启动时 Bun 应在 PATH 中，也可通过 `BRO_BUN_PATH` 指定它的完整路径。
 
-功能按最新取舍收敛：不设 Plan/Goal 模式；Appshots、定时任务、多文件夹项目、临时侧聊、复杂文件预览、内置共享浏览器工作台、高级 diff 交互及一组 OMP 附加模块暂缓。Mac 锁屏后的 Computer Use 只作可行性探索，不强求。完整取舍见项目方案，开发顺序与验证要求见实施方案。
+## 当前能力
 
-完整行为、取舍、来源与验收要求见 [项目方案](docs/changes/agent-workbench/solution.md)。
+- 项目、会话、重命名、置顶、归档、删除、历史恢复与分支；Markdown、图片、工具输出、文件链接、基础 Git diff 和文字批注。
+- 独立 OMP 进程、持久队列、跨会话查询和异步交办。非 GUI 消息全部排队。同一工作目录的普通任务按轮次串行，不同目录可并行。
+- GUI 关闭后，宿主和运行中的任务继续；可选择登录电脑后启动后台，也可在设置中明确停止后台并退出。
+- 飞书官方长连接、可信 open_id 名单、私聊及群成员 @ 路由、引用与附件处理、分段回复及待核对投递记录。须配置自己的飞书应用和权限。
+- Peer Relay `/sub`、`/send` 协议，含补投、去重、可信来源和关联回复；通用 SSE、进程 stdout 和文件变化监听。无事件时不调用模型。
+- 从本地/Git 安装 Skill 和 OMP 插件，配置 MCP；启停和更新在安全的运行边界生效。项目规则只加载当前项目的 `AGENTS.md` 和 bro 明确配置的资源。
+- OMP 原有无头浏览器、文件编辑、终端、搜索、临时子任务和开发工具。原生桌面通过 OMP native 后端操作，配有批次协调和系统输入监听；首次使用必须具备系统权限。
+- Mnemopi 持久开关；Skill 选择、上下文选择、压缩重点的常规/旁路/实验三种策略。Jev 和 Laya 复用 OMP 的 System One 协议客户端，失败回退常规。常规模式不请求判断模型。
 
-实现步骤、依赖关系与整体验证见 [实施方案](docs/changes/agent-workbench/implementation.md)。
+GUI 显示模型返回的 token 用量和 OMP 上下文估算。自定义 API 没有配置价格表时显示费用未知，不把 0 当成真实费用。ChatGPT 订阅额度以服务端为准。模型连接支持编辑、删除和设为默认；会话草稿独立保存，归档会话可查看和恢复。
 
-## 协作
+## 配置与数据
 
-本仓库按用户要求直接提交并推送到 `main`，不自动创建 PR。仓库协作约定见 [AGENTS.md](AGENTS.md)。
+默认数据位置：
+
+- macOS：`~/Library/Application Support/bro`
+- Windows：`%LOCALAPPDATA%/bro`
+- 测试或独立实例：设置 `BRO_DATA_DIR`
+
+宿主管理 `host.sqlite` 中的队列、绑定和投递关联；OMP 管理 `sessions/` 中的权威聊天历史。凭据存放在此私有数据根目录内，不应提交到 Git。设置中可打开数据目录查看 `logs/`。
+
+飞书需要启用 Bot、长连接事件 `im.message.receive_v1` 和消息/附件权限；首先把自己的 `ou_…` 加入可信名单。群里只有实际 @ Bot 的可信成员才触发任务，同一群的不同成员有独立会话。会话归档/删除解除绑定，下次有效消息重新创建。
+
+Peer 的身份、Token、可信发送者和目标会话必须显式配置；不会自动启用已有 Peer 账号。Jev/Laya 设置填写服务根地址，客户端追加 `/v1/systemone`。Laya 可使用 `multilingual` 模型；本项目不自动安装其模型权重。
+
+## 构建与验证
+
+```sh
+bun run check
+bun test tests
+bun run probe:omp
+bun run probe:runtime
+bun run probe:controls
+bun run probe:memory
+bun run probe:desktop
+bun run package
+```
+
+探针使用本机确定性模型接口，运行的是实际 OMP 进程和工具；它们不验证真实账号授权或模型质量。`probe:runtime` 可通过 `BRO_PROBE_BROWSER` 指定 Chrome/Chromium 可执行文件，额外验证独立无头浏览器。`probe:memory` 验证原生 Mnemopi 的自动保存和 FTS 检索/注入、on/off；默认向量和抽取模型仍需验收。
+
+在 macOS 打包会生成 `out/macos-arm64/bro.app` 与 ZIP，包含 Bun、生产依赖和预编译输入监听器，使用本地 ad-hoc 签名。Windows 原生打包脚本生成 `out/windows-x64/bro/bro.exe` 和 ZIP；当前未在 Windows 实机完成验收。构建流程见 `.github/workflows/check.yml`。可通过 `BRO_NPM_REGISTRY` 为打包时的依赖安装指定镜像。
+
+macOS 需要辅助功能/输入监控权限才能启用原生桌面操作；当前能力探针与待补验收记录在实施文档中。应用包尚未进行 Apple 公证或正式 Windows 代码签名。
+
+## 范围与资料
+
+不实现 Plan/Goal；Appshots、微信、执行沙箱、定时任务、复杂文件预览、高级 diff、临时侧聊，以及此前明确暂缓的 OMP 附加功能不纳入此版。官方托管连接器和云端执行不在范围内。Mac 锁屏后的桌面操作为可选探索。
+
+- [确认的需求与取舍](docs/changes/agent-workbench/solution.md)
+- [实施步骤、进度与证据](docs/changes/agent-workbench/implementation.md)
+- [需要后续处理的事项](docs/changes/agent-workbench/open-issues.md)
+
+本轮实现保存在 `codex/initial-desktop` 工作分支；遵循本轮提供的协作约束，不创建或合并 PR，也不将功能变更直接合入 main。

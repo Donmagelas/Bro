@@ -1,0 +1,1595 @@
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { createRoot } from "react-dom/client";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import type {
+  Annotation,
+  Attachment,
+  ChatMessage,
+  HostState,
+  Input,
+  Session,
+} from "../../../../packages/contracts";
+import "./style.css";
+import { ResourcePanel } from "./ResourcePanel";
+import { ExperimentPanel } from "./ExperimentPanel";
+import { useDrafts } from "./useDrafts";
+import { OutboxPanel } from "./OutboxPanel";
+
+declare global {
+  interface Window {
+    bro: {
+      request: (path: string, method?: string, body?: unknown) => Promise<any>;
+      stopHost: () => Promise<void>;
+      loginItem: (enabled?: boolean) => Promise<boolean>;
+      directory: () => Promise<string | null>;
+      attachments: () => Promise<Attachment[]>;
+      open: (path: string) => Promise<void>;
+      onEvent: (fn: (event: any) => void) => () => void;
+    };
+  }
+}
+const api = (path: string, method = "GET", body?: unknown) =>
+  window.bro.request(path, method, body);
+const labels: Record<string, string> = {
+  idle: "就绪",
+  starting: "启动中",
+  waiting: "等待工作目录",
+  running: "进行中",
+  interrupted: "已中断",
+  error: "需要处理",
+  queued: "排队中",
+  failed: "失败",
+  completed: "完成",
+  cancelled: "已停止",
+};
+function Icon({ name, size = 18 }: { name: string; size?: number }) {
+  const paths: Record<string, React.ReactNode> = {
+    plus: <path d="M12 5v14M5 12h14" />,
+    search: (
+      <>
+        <circle cx="10.5" cy="10.5" r="6.5" />
+        <path d="m16 16 4 4" />
+      </>
+    ),
+    folder: <path d="M3 7V5h6l2 2h10v13H3z" />,
+    settings: (
+      <>
+        <circle cx="12" cy="12" r="3" />
+        <path d="m9 3-1 3-3 1-2 5 2 5 3 1 1 3h6l1-3 3-1 2-5-2-5-3-1-1-3z" />
+      </>
+    ),
+    send: <path d="M12 20V4m-6 6 6-6 6 6" />,
+    clip: <path d="m8 14 7-7a3 3 0 0 1 4 4l-9 9a5 5 0 0 1-7-7L13 3" />,
+    stop: <rect x="6" y="6" width="12" height="12" rx="2" />,
+    message: <path d="M4 4h16v12H9l-5 4z" />,
+    close: <path d="m6 6 12 12M6 18 18 6" />,
+    chevron: <path d="m9 5 7 7-7 7" />,
+    pin: <path d="m8 3 8 0-1 6 4 5H5l4-5zm4 11v7" />,
+    activity: <path d="M2 12h5l3-8 4 16 3-8h5" />,
+    more: (
+      <>
+        <circle cx="5" cy="12" r="1" />
+        <circle cx="12" cy="12" r="1" />
+        <circle cx="19" cy="12" r="1" />
+      </>
+    ),
+  };
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {paths[name] || paths.message}
+    </svg>
+  );
+}
+function textOf(message: ChatMessage): string {
+  if (
+    message.role === "user" &&
+    message.bro?.inputs.every((i) => i.text !== undefined)
+  )
+    return message.bro.inputs.map((i) => i.text).join("\n\n");
+  if (typeof message.content === "string") return message.content;
+  if (!Array.isArray(message.content)) return "";
+  return message.content
+    .filter((c: any) => c.type === "text")
+    .map((c: any) => c.text)
+    .join("\n");
+}
+function App() {
+  const [state, setState] = useState<HostState | null>(null),
+    [selected, setSelected] = useState<string | null>(null),
+    [messages, setMessages] = useState<ChatMessage[]>([]),
+    [inputs, setInputs] = useState<Input[]>([]);
+  const {
+    draft,
+    setDraft,
+    attachments,
+    setAttachments,
+    annotations,
+    setAnnotations,
+  } = useDrafts(selected);
+  const [search, setSearch] = useState(""),
+    [settings, setSettings] = useState(false),
+    [settingsTab, setSettingsTab] = useState("模型"),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false),
+    [mode, setMode] = useState<"queue" | "steer">("queue");
+  const [live, setLive] = useState(""),
+    [tool, setTool] = useState(""),
+    [menu, setMenu] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [diff, setDiff] = useState<any>(null);
+  const [usage, setUsage] = useState<any>(null);
+  const [question, setQuestion] = useState<{
+    title: string;
+    value: string;
+    submit: (value: string) => void;
+  } | null>(null);
+  const loadSequence = useRef(0),
+    stateSequence = useRef(0);
+  const selectedRef = useRef(selected),
+    bottom = useRef<HTMLDivElement>(null);
+  selectedRef.current = selected;
+  const refresh = useCallback(async () => {
+    try {
+      const seq = ++stateSequence.current;
+      const result = await api("/state");
+      if (seq === stateSequence.current) setState(result);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+  const load = useCallback(async (id: string) => {
+    try {
+      const seq = ++loadSequence.current;
+      const [data, stats] = await Promise.all([
+        api(`/sessions/${id}/history`),
+        api(`/sessions/${id}/stats`),
+      ]);
+      if (selectedRef.current === id && seq === loadSequence.current) {
+        setUsage(stats);
+        setMessages(data.messages);
+        setInputs(data.inputs);
+      }
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+  useEffect(() => {
+    void refresh();
+    return window.bro.onEvent((event) => {
+      if (event.type === "state") {
+        void refresh();
+        if (selectedRef.current) void load(selectedRef.current);
+      }
+      if (event.sessionId === selectedRef.current) {
+        if (event.type === "runtime") {
+          const e = event.data;
+          if (
+            e.type === "message_update" &&
+            e.assistantMessageEvent?.type === "text_delta"
+          )
+            setLive((v) => v + e.assistantMessageEvent.delta);
+          if (e.type === "tool_execution_start") setTool(e.toolName);
+          if (e.type === "tool_execution_end") setTool("");
+          if (
+            e.type === "message_end" ||
+            (e.type === "agent_end" && e.isTerminal !== false)
+          ) {
+            setLive("");
+            if (selectedRef.current) void load(selectedRef.current);
+          }
+        } else if (event.type === "history") {
+          loadSequence.current++;
+          setMessages(event.data);
+          setLive("");
+          setTool("");
+        }
+      }
+      if (event.type === "disconnected") setError("后台连接正在恢复…");
+    });
+  }, [refresh, load]);
+  useEffect(() => {
+    setUsage(null);
+    setMessages([]);
+    setInputs([]);
+    setLive("");
+    setTool("");
+    setMenu(false);
+    if (selected) void load(selected);
+  }, [selected, load]);
+  useEffect(() => {
+    bottom.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length, live, tool]);
+  const session = [
+    ...(state?.sessions || []),
+    ...(state?.archivedSessions || []),
+  ].find((s) => s.id === selected);
+  const run = async (fn: () => Promise<unknown>) => {
+    try {
+      setError("");
+      await fn();
+      await refresh();
+    } catch (e) {
+      setError(String(e).replace(/^Error: /, ""));
+    }
+  };
+  const newSession = async (projectId?: string) => {
+    const s = await api("/sessions", "POST", { projectId });
+    setSelected(s.id);
+    setShowArchived(false);
+    await refresh();
+    return s.id as string;
+  };
+  async function send() {
+    if (!draft.trim() || busy || session?.archived) return;
+    setBusy(true);
+    try {
+      let id = selected;
+      if (!id) id = await newSession();
+      await api(`/sessions/${id}/messages`, "POST", {
+        id: crypto.randomUUID(),
+        text: draft,
+        mode,
+        attachments,
+        annotations,
+      });
+      setDraft("");
+      setAttachments([]);
+      setAnnotations([]);
+      await load(id);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const patch = (values: unknown) =>
+    run(() => api(`/sessions/${selected}`, "PATCH", values));
+  function annotate(message: ChatMessage) {
+    const selection = window.getSelection();
+    const quote = selection?.toString().trim();
+    const node =
+      selection?.anchorNode?.parentElement?.closest("[data-message-id]");
+    if (!quote || node?.getAttribute("data-message-id") !== message.id) {
+      setError("先选中回复中的一段文字，再添加批注。");
+      return;
+    }
+    setQuestion({
+      title: "对选中内容的意见",
+      value: "",
+      submit: (comment) =>
+        setAnnotations((v) => [
+          ...v,
+          { messageId: message.id, quote, comment },
+        ]),
+    });
+  }
+  return (
+    <div className="app">
+      <aside className="sidebar">
+        <div className="brand">
+          <span className="brand-mark">b</span>
+          <strong>bro</strong>
+          <span className="local-label">本机</span>
+        </div>
+        <button
+          className="nav-button"
+          onClick={() => void run(() => newSession())}
+        >
+          <Icon name="plus" />
+          新会话<span className="keyhint">⌘ N</span>
+        </button>
+        <label className="search">
+          <Icon name="search" size={16} />
+          <input
+            aria-label="搜索会话"
+            placeholder="搜索会话"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </label>
+        <div className="section-label">
+          项目
+          <button
+            aria-label="添加项目"
+            onClick={() =>
+              void run(async () => {
+                const path = await window.bro.directory();
+                if (path) await api("/projects", "POST", { path });
+              })
+            }
+          >
+            <Icon name="plus" size={15} />
+          </button>
+        </div>
+        <div className="projects">
+          {state?.projects.map((p) => (
+            <button
+              className="project"
+              key={p.id}
+              onClick={() => void run(() => newSession(p.id))}
+            >
+              <Icon name="folder" size={16} />
+              <span>{p.name}</span>
+              <Icon name="plus" size={14} />
+            </button>
+          ))}
+          {!state?.projects.length && (
+            <div className="sidebar-hint">添加目录，开始项目工作</div>
+          )}
+        </div>
+        <div className="section-label">
+          {showArchived ? "已归档" : "会话"}
+          <button onClick={() => setShowArchived(!showArchived)}>
+            {showArchived ? "返回会话" : "查看归档"}
+          </button>
+        </div>
+        <div className="session-list">
+          {(showArchived ? state?.archivedSessions : state?.sessions)
+            ?.filter((s) =>
+              s.title.toLowerCase().includes(search.toLowerCase()),
+            )
+            .map((s) => (
+              <button
+                key={s.id}
+                data-session-id={s.id}
+                className={`session-item ${s.id === selected ? "selected" : ""}`}
+                onClick={() => setSelected(s.id)}
+              >
+                <span className={`status-dot ${s.status}`} />
+                <span className="session-name">{s.title}</span>
+                {s.pinned && <Icon name="pin" size={12} />}{" "}
+                {!!s.queued && <span className="count">{s.queued}</span>}
+              </button>
+            ))}
+        </div>
+        <div className="sidebar-bottom">
+          <div className="host-status">
+            <span className={`status-dot ${state ? "idle" : "error"}`} />
+            {state ? "后台已连接" : "连接后台…"}
+            <span>0.1</span>
+          </div>
+          <button className="nav-button" onClick={() => setSettings(true)}>
+            <Icon name="settings" />
+            设置与连接
+          </button>
+        </div>
+      </aside>
+      <main>
+        <header className="topbar">
+          <div>
+            <span className="breadcrumb">
+              {session?.projectId
+                ? state?.projects.find((p) => p.id === session.projectId)?.name
+                : "工作台"}
+            </span>
+            <Icon name="chevron" size={13} />
+            <strong>{session?.title || "新会话"}</strong>
+          </div>
+          <div className="top-actions">
+            {session && (
+              <>
+                <span className={`status-chip ${session.status}`}>
+                  {labels[session.status]}
+                </span>
+                <button
+                  className="icon-button"
+                  aria-label="会话操作"
+                  onClick={() => setMenu(!menu)}
+                >
+                  <Icon name="more" />
+                </button>
+              </>
+            )}
+            {menu && session && (
+              <div className="popover">
+                <button
+                  onClick={() =>
+                    void run(() =>
+                      api(`/sessions/${selected}/compact`, "POST", {}),
+                    )
+                  }
+                >
+                  压缩上下文
+                </button>
+                <button
+                  onClick={() =>
+                    void run(async () => {
+                      setDiff(await api(`/sessions/${selected}/diff`));
+                      setMenu(false);
+                    })
+                  }
+                >
+                  查看改动
+                </button>
+                <button
+                  onClick={() => {
+                    setQuestion({
+                      title: "会话名称",
+                      value: session.title,
+                      submit: (title) => void patch({ title }),
+                    });
+                    setMenu(false);
+                  }}
+                >
+                  重命名
+                </button>
+                <button onClick={() => void patch({ pinned: !session.pinned })}>
+                  {session.pinned ? "取消置顶" : "置顶"}
+                </button>
+                <button
+                  onClick={() =>
+                    void run(async () => {
+                      const s = await api(
+                        `/sessions/${selected}/fork`,
+                        "POST",
+                        {},
+                      );
+                      setSelected(s.id);
+                    })
+                  }
+                >
+                  创建分支
+                </button>
+                <button
+                  onClick={() =>
+                    void run(async () => {
+                      await api(`/sessions/${selected}`, "PATCH", {
+                        archived: !session.archived,
+                      });
+                      setSelected(null);
+                    })
+                  }
+                >
+                  {session.archived ? "恢复会话" : "归档"}
+                </button>
+                <button
+                  className="danger"
+                  onClick={() => {
+                    if (window.confirm("删除此会话？"))
+                      void run(async () => {
+                        await api(`/sessions/${selected}`, "DELETE");
+                        setSelected(null);
+                      });
+                  }}
+                >
+                  删除
+                </button>
+              </div>
+            )}
+          </div>
+        </header>
+        {error && (
+          <div role="alert" className="error-banner">
+            <span>{error}</span>
+            <button aria-label="关闭错误" onClick={() => setError("")}>
+              <Icon name="close" size={15} />
+            </button>
+          </div>
+        )}
+        <div className="conversation">
+          {!messages.length && !inputs.length && !live && (
+            <section className="welcome">
+              <div className="welcome-mark">
+                b<span>↗</span>
+              </div>
+              <h1>一起把事情做好。</h1>
+              <p>写代码、整理信息，或把任务交给另一个会话。</p>
+              <div className="suggestions">
+                {[
+                  "看看这个项目，从哪里开始？",
+                  "帮我定位并修复一个问题",
+                  "查看其他会话的进展",
+                ].map((t) => (
+                  <button key={t} onClick={() => setDraft(t)}>
+                    {t}
+                    <Icon name="chevron" size={14} />
+                  </button>
+                ))}
+              </div>
+              {!state?.connections.length && (
+                <button
+                  className="connect-callout"
+                  onClick={() => {
+                    setSettingsTab("模型");
+                    setSettings(true);
+                  }}
+                >
+                  连接你的模型，开始使用 <Icon name="chevron" size={14} />
+                </button>
+              )}
+            </section>
+          )}
+          <div className="messages">
+            {messages
+              .filter(
+                (m) =>
+                  m.role !== "assistant" ||
+                  textOf(m) ||
+                  (Array.isArray(m.content) &&
+                    m.content.some((c: any) => c.type === "image")),
+              )
+              .map((m) => (
+                <article
+                  data-message-id={m.id}
+                  key={m.id}
+                  className={`message ${m.role}`}
+                >
+                  {m.role === "toolResult" ? (
+                    <details className="tool-result">
+                      <summary>
+                        <Icon name="activity" size={14} />
+                        {m.toolName || "工具结果"}
+                      </summary>
+                      <pre>{textOf(m)}</pre>
+                      {Array.isArray(m.content) &&
+                        m.content
+                          .filter((c: any) => c.type === "image" && c.data)
+                          .map((c: any, i: number) => (
+                            <img
+                              className="chat-image"
+                              key={i}
+                              alt="工具截图"
+                              src={`data:${c.mimeType};base64,${c.data}`}
+                            />
+                          ))}
+                    </details>
+                  ) : (
+                    <>
+                      <div className="message-author">
+                        {m.role === "user" ? "你" : "bro"}
+                      </div>
+                      {Array.isArray(m.content) &&
+                        m.content
+                          .filter((c: any) => c.type === "image" && c.data)
+                          .map((c: any, i: number) => (
+                            <img
+                              className="chat-image"
+                              key={i}
+                              src={`data:${c.mimeType};base64,${c.data}`}
+                              alt="会话图片"
+                            />
+                          ))}
+                      <div className="markdown">
+                        <Markdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            a: ({ href, children }) => (
+                              <a
+                                href="#"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  if (href)
+                                    void run(() => window.bro.open(href));
+                                }}
+                              >
+                                {children}
+                              </a>
+                            ),
+                          }}
+                        >
+                          {textOf(m)}
+                        </Markdown>
+                      </div>
+                      {m.bro?.inputs
+                        .flatMap((i) => i.annotations || [])
+                        .map((a, i) => (
+                          <div className="message-annotation" key={i}>
+                            <blockquote>{a.quote}</blockquote>
+                            <p>{a.comment}</p>
+                          </div>
+                        ))}
+                      {m.role === "assistant" && (
+                        <button
+                          className="annotation-button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => annotate(m)}
+                        >
+                          选中文字后批注
+                        </button>
+                      )}
+                    </>
+                  )}
+                </article>
+              ))}
+            {live && (
+              <article className="message assistant">
+                <div className="message-author">bro</div>
+                <div className="markdown">
+                  <Markdown>{live}</Markdown>
+                </div>
+              </article>
+            )}
+            {tool && (
+              <div className="running-tool">
+                <span className="spinner" />
+                {tool}
+              </div>
+            )}
+            {inputs
+              .filter((i) =>
+                ["queued", "failed", "interrupted"].includes(i.status),
+              )
+              .map((i) => (
+                <div className={`queue-item ${i.status}`} key={i.id}>
+                  <span>{labels[i.status]}</span>
+                  <p>{i.text}</p>
+                  {i.error && <small>{i.error}</small>}
+                </div>
+              ))}
+            {session?.error && (
+              <div className="inline-error">
+                {session.error}
+                <button
+                  onClick={() =>
+                    void run(() =>
+                      api(`/sessions/${selected}/resume`, "POST", {}),
+                    )
+                  }
+                >
+                  继续处理队列
+                </button>
+              </div>
+            )}
+            <div ref={bottom} />
+          </div>
+        </div>
+        <div className="composer-wrap">
+          <div className="composer">
+            {!!attachments.length && (
+              <div className="attachments">
+                {attachments.map((a, i) => (
+                  <button
+                    key={a.path}
+                    onClick={() =>
+                      setAttachments((v) => v.filter((_, n) => n !== i))
+                    }
+                  >
+                    {a.name} ×
+                  </button>
+                ))}
+              </div>
+            )}
+            {!!annotations.length && (
+              <div className="annotations">
+                {annotations.map((a, i) => (
+                  <div key={i}>
+                    <blockquote>{a.quote}</blockquote>
+                    <span>{a.comment}</span>
+                    <button
+                      onClick={() =>
+                        setAnnotations((v) => v.filter((_, n) => n !== i))
+                      }
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <textarea
+              aria-label="消息"
+              placeholder="交给 bro 一件事…"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (
+                  e.key === "Enter" &&
+                  !e.shiftKey &&
+                  !e.nativeEvent.isComposing
+                ) {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
+            />
+            <div className="composer-toolbar">
+              <div>
+                <button
+                  className="icon-button"
+                  aria-label="添加附件"
+                  onClick={() =>
+                    void run(async () => {
+                      const files = await window.bro.attachments();
+                      setAttachments((v) => [...v, ...files]);
+                    })
+                  }
+                >
+                  <Icon name="clip" />
+                </button>
+                <select
+                  aria-label="模型连接"
+                  value={
+                    session?.connectionId ||
+                    state?.settings.defaultConnectionId ||
+                    ""
+                  }
+                  onChange={(e) =>
+                    selected
+                      ? void patch({ connectionId: e.target.value })
+                      : void run(() =>
+                          api("/settings", "PATCH", {
+                            defaultConnectionId: e.target.value,
+                          }),
+                        )
+                  }
+                >
+                  <option value="" disabled>
+                    选择模型
+                  </option>
+                  {state?.connections.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} · {c.model}
+                    </option>
+                  ))}
+                </select>
+                {session && (
+                  <select
+                    aria-label="推理强度"
+                    value={session.thinking}
+                    onChange={(e) => void patch({ thinking: e.target.value })}
+                  >
+                    {["off", "low", "medium", "high", "xhigh"].map((v) => (
+                      <option key={v} value={v}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+              <div>
+                <select
+                  aria-label="投递方式"
+                  value={mode}
+                  onChange={(e) => setMode(e.target.value as typeof mode)}
+                >
+                  <option value="queue">排队发送</option>
+                  <option value="steer">Steer</option>
+                </select>
+                {["running", "waiting"].includes(session?.status || "") && (
+                  <button
+                    className="stop-button"
+                    aria-label="停止运行"
+                    onClick={() =>
+                      void run(() =>
+                        api(`/sessions/${selected}/stop`, "POST", {}),
+                      )
+                    }
+                  >
+                    <Icon name="stop" size={15} />
+                  </button>
+                )}
+                <button
+                  className="send-button"
+                  aria-label="发送"
+                  disabled={!draft.trim() || busy || session?.archived}
+                  onClick={() => void send()}
+                >
+                  <Icon name="send" size={18} />
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="composer-footer">
+            <span>
+              {session?.cwd || state?.settings.defaultCwd || "本机工作目录"}
+            </span>
+            <span>
+              {usage?.context && (
+                <span title="OMP 本地估算">
+                  上下文约 {Number(usage.context.tokens).toLocaleString()} /{" "}
+                  {Number(usage.context.contextWindow).toLocaleString()} ·{" "}
+                </span>
+              )}
+              {messages.some((m: any) => m.usage)
+                ? `${(usage?.totals?.tokens?.total || messages.reduce((sum, m: any) => sum + (m.usage?.totalTokens || 0), 0)).toLocaleString()} tokens · ${state?.connections.find((c) => c.id === session?.connectionId)?.kind === "api" ? "费用未配置" : "账号额度以服务端为准"}`
+                : "Enter 发送 · Shift Enter 换行"}
+            </span>
+          </div>
+        </div>
+      </main>
+      {settings && state && (
+        <SettingsPanel
+          state={state}
+          tab={settingsTab}
+          setTab={setSettingsTab}
+          close={() => setSettings(false)}
+          run={run}
+          selected={selected}
+        />
+      )}
+      {diff && (
+        <div className="modal-backdrop">
+          <section className="diff-modal">
+            <button
+              className="modal-close icon-button"
+              onClick={() => setDiff(null)}
+            >
+              关闭
+            </button>
+            <h3>工作目录改动</h3>
+            <pre>{diff.status || "工作目录干净"}</pre>
+            {diff.unstaged && (
+              <>
+                <h4>未暂存</h4>
+                <pre>{diff.unstaged}</pre>
+              </>
+            )}
+            {diff.staged && (
+              <>
+                <h4>已暂存</h4>
+                <pre>{diff.staged}</pre>
+              </>
+            )}
+          </section>
+        </div>
+      )}
+      {question && (
+        <div className="modal-backdrop">
+          <form
+            className="question-modal"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (question.value.trim()) {
+                question.submit(question.value);
+                setQuestion(null);
+              }
+            }}
+          >
+            <h3>{question.title}</h3>
+            <textarea
+              autoFocus
+              value={question.value}
+              onChange={(e) =>
+                setQuestion((q) => (q ? { ...q, value: e.target.value } : null))
+              }
+            />
+            <div>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setQuestion(null)}
+              >
+                取消
+              </button>
+              <button className="primary" disabled={!question.value.trim()}>
+                确定
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SettingsPanel({
+  state,
+  tab,
+  setTab,
+  close,
+  run,
+  selected,
+}: {
+  state: HostState;
+  tab: string;
+  setTab: (v: string) => void;
+  close: () => void;
+  run: (fn: () => Promise<unknown>) => Promise<void>;
+  selected: string | null;
+}) {
+  const [loginItem, setLoginItem] = useState(false);
+  useEffect(() => {
+    void window.bro
+      .loginItem()
+      .then(setLoginItem)
+      .catch(() => {});
+  }, []);
+  const [editingConnection, setEditingConnection] = useState<string | null>(
+    null,
+  );
+  const [connection, setConnection] = useState({
+    name: "",
+    kind: "api",
+    baseUrl: "https://api.openai.com/v1",
+    apiKey: "",
+    model: "",
+    api: "openai-completions",
+    imageInput: true,
+    reasoning: true,
+  });
+  const [feishu, setFeishu] = useState({
+    appId: state.feishu.appId || "",
+    appSecret: "",
+    botId: state.feishu.botId || "",
+  });
+  const [trusted, setTrusted] = useState(
+    state.settings.trustedFeishuUsers.join("\n"),
+  );
+  const [subscription, setSubscription] = useState({
+    name: "",
+    kind: "sse",
+    url: "",
+    path: "",
+    command: "",
+    me: "",
+    token: "",
+    trustedSenders: "",
+    targetSessionId: selected || "",
+    enabled: true,
+  });
+  const [auth, setAuth] = useState<any>(null),
+    [authAnswer, setAuthAnswer] = useState("");
+  useEffect(() => {
+    if (tab !== "模型" || connection.kind !== "chatgpt") return;
+    let active = true;
+    const refresh = () =>
+      api("/auth/status")
+        .then((v) => {
+          if (active) setAuth(v);
+        })
+        .catch((e) => {
+          if (active) setAuth({ error: String(e) });
+        });
+    void refresh();
+    const timer = setInterval(refresh, 1500);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [tab, connection.kind]);
+  const update = (k: string, v: string | boolean) =>
+    setConnection((c) => ({ ...c, [k]: v }));
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) close();
+      }}
+    >
+      <section className="settings-modal">
+        <aside>
+          <h2>设置</h2>
+          {["模型", "飞书", "Monitor", "资源", "记忆与实验", "通用"].map(
+            (t) => (
+              <button
+                className={tab === t ? "active" : ""}
+                key={t}
+                onClick={() => setTab(t)}
+              >
+                {t}
+              </button>
+            ),
+          )}
+        </aside>
+        <div className="settings-content">
+          <button
+            className="modal-close icon-button"
+            aria-label="关闭设置"
+            onClick={close}
+          >
+            <Icon name="close" />
+          </button>
+          <h2>{tab}</h2>
+          {tab === "模型" && (
+            <>
+              <p className="description">
+                连接 ChatGPT 账号，或使用自己的 API 服务。
+              </p>
+              {state.connections.map((c) => (
+                <div className="connection-card" key={c.id}>
+                  <strong>{c.name}</strong>
+                  <span>{c.model}</span>
+                  <small>
+                    {c.kind === "chatgpt" ? "ChatGPT 账号" : c.baseUrl}
+                  </small>
+                  <div>
+                    <button
+                      onClick={() => {
+                        setEditingConnection(c.id);
+                        setConnection({
+                          name: c.name,
+                          kind: c.kind,
+                          baseUrl: c.baseUrl || "",
+                          apiKey: "",
+                          model: c.model,
+                          api: c.api || "openai-completions",
+                          imageInput: c.imageInput,
+                          reasoning: c.reasoning,
+                        });
+                      }}
+                    >
+                      修改
+                    </button>
+                    <button
+                      onClick={() =>
+                        void run(() =>
+                          api("/settings", "PATCH", {
+                            defaultConnectionId: c.id,
+                          }),
+                        )
+                      }
+                    >
+                      {state.settings.defaultConnectionId === c.id
+                        ? "默认连接"
+                        : "设为默认"}
+                    </button>
+                    <button
+                      onClick={() =>
+                        void run(async () => {
+                          await api(`/connections/${c.id}`, "DELETE");
+                          if (editingConnection === c.id)
+                            setEditingConnection(null);
+                        })
+                      }
+                    >
+                      删除连接
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {editingConnection && (
+                <div className="notice">
+                  正在修改已有连接；API Key 留空保留原值。
+                  <button onClick={() => setEditingConnection(null)}>
+                    改为新增连接
+                  </button>
+                </div>
+              )}
+              <div className="segmented">
+                <button
+                  className={connection.kind === "api" ? "active" : ""}
+                  onClick={() => update("kind", "api")}
+                >
+                  API Key
+                </button>
+                <button
+                  className={connection.kind === "chatgpt" ? "active" : ""}
+                  onClick={() => update("kind", "chatgpt")}
+                >
+                  ChatGPT
+                </button>
+              </div>
+              {connection.kind === "chatgpt" ? (
+                <div>
+                  <p className="description">
+                    使用 OMP 的 ChatGPT 授权流程，账号凭据只保存在 bro
+                    数据目录。
+                  </p>
+                  {auth?.accounts?.length ? (
+                    <div className="connection-card">
+                      <strong>账号已连接</strong>
+                      <span>
+                        {auth.accounts[0].email || auth.accounts[0].accountId}
+                      </span>
+                      <button
+                        onClick={() =>
+                          void run(() => api("/auth/logout", "POST", {}))
+                        }
+                      >
+                        退出
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      className="primary"
+                      onClick={() =>
+                        void run(() => api("/auth/login", "POST", {}))
+                      }
+                    >
+                      登录 ChatGPT
+                    </button>
+                  )}
+                  {auth?.url && (
+                    <button
+                      className="secondary"
+                      onClick={() => void run(() => window.bro.open(auth.url))}
+                    >
+                      打开浏览器授权
+                    </button>
+                  )}
+                  {auth?.instructions && (
+                    <p className="description">{auth.instructions}</p>
+                  )}
+                  {auth?.error && <div className="notice">{auth.error}</div>}
+                  {auth?.prompt && (
+                    <>
+                      <Field
+                        label={auth.prompt}
+                        value={authAnswer}
+                        onChange={setAuthAnswer}
+                      />
+                      <button
+                        className="secondary"
+                        onClick={() =>
+                          void run(() =>
+                            api("/auth/answer", "POST", { value: authAnswer }),
+                          )
+                        }
+                      >
+                        提交授权信息
+                      </button>
+                    </>
+                  )}
+                  <Field
+                    label="连接名称"
+                    value={connection.name}
+                    onChange={(v) => update("name", v)}
+                    placeholder="ChatGPT"
+                  />
+                  <label className="field">
+                    模型
+                    <select
+                      value={connection.model}
+                      onChange={(e) => update("model", e.target.value)}
+                    >
+                      <option value="">选择模型</option>
+                      {auth?.models?.map((m: any) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name || m.id}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    className="primary"
+                    disabled={!auth?.accounts?.length || !connection.model}
+                    onClick={() =>
+                      void run(() =>
+                        api("/connections", "POST", {
+                          ...connection,
+                          ...auth.models.find(
+                            (m: any) => m.id === connection.model,
+                          ),
+                          id: editingConnection || undefined,
+                          name: connection.name || "ChatGPT",
+                          model: connection.model,
+                          apiKey: undefined,
+                        }),
+                      )
+                    }
+                  >
+                    保存账号连接
+                  </button>
+                </div>
+              ) : (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void run(async () => {
+                      await api("/connections", "POST", {
+                        ...connection,
+                        id: editingConnection || undefined,
+                      });
+                      setConnection((c) => ({ ...c, apiKey: "" }));
+                    });
+                  }}
+                >
+                  <Field
+                    label="连接名称"
+                    value={connection.name}
+                    onChange={(v) => update("name", v)}
+                    placeholder="我的模型"
+                  />
+                  <Field
+                    label="Base URL"
+                    value={connection.baseUrl}
+                    onChange={(v) => update("baseUrl", v)}
+                  />
+                  <Field
+                    label="API Key"
+                    type="password"
+                    value={connection.apiKey}
+                    onChange={(v) => update("apiKey", v)}
+                  />
+                  <Field
+                    label="模型 ID"
+                    value={connection.model}
+                    onChange={(v) => update("model", v)}
+                    placeholder="服务商提供的模型名称"
+                  />
+                  <label className="field">
+                    接口协议
+                    <select
+                      value={connection.api}
+                      onChange={(e) => update("api", e.target.value)}
+                    >
+                      <option value="openai-completions">
+                        OpenAI Chat Completions
+                      </option>
+                      <option value="openai-responses">OpenAI Responses</option>
+                      <option value="anthropic-messages">
+                        Anthropic Messages
+                      </option>
+                    </select>
+                  </label>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={connection.imageInput}
+                      onChange={(e) => update("imageInput", e.target.checked)}
+                    />
+                    支持图片输入
+                  </label>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={connection.reasoning}
+                      onChange={(e) => update("reasoning", e.target.checked)}
+                    />
+                    支持推理强度
+                  </label>
+                  <button className="primary">保存连接</button>
+                </form>
+              )}
+            </>
+          )}
+          {tab === "飞书" && (
+            <>
+              <p className="description">
+                私聊连接一个会话；群聊按成员分别续接，被可信成员 @ 时才回复。
+              </p>
+              <div className="status-row">
+                <span
+                  className={`status-dot ${state.feishu.connected ? "idle" : "error"}`}
+                />
+                {state.feishu.connected ? "连接已启动" : "尚未连接"}
+              </div>
+              {state.feishu.error && (
+                <div className="notice">{state.feishu.error}</div>
+              )}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void run(() =>
+                    api("/feishu", "POST", { ...feishu, enabled: true }),
+                  );
+                }}
+              >
+                <Field
+                  label="App ID"
+                  value={feishu.appId}
+                  onChange={(v) => setFeishu((x) => ({ ...x, appId: v }))}
+                />
+                <Field
+                  label="App Secret"
+                  type="password"
+                  value={feishu.appSecret}
+                  onChange={(v) => setFeishu((x) => ({ ...x, appSecret: v }))}
+                />
+                <Field
+                  label="Bot open_id（可留空自动获取）"
+                  value={feishu.botId}
+                  onChange={(v) => setFeishu((x) => ({ ...x, botId: v }))}
+                />
+                <button className="primary">保存并连接</button>
+              </form>
+              <hr />
+              <h3>受信任的人</h3>
+              <p className="description">
+                首次填写你自己的 open_id。每行一个；名单内均可完整使用 bro。
+              </p>
+              <textarea
+                className="settings-textarea"
+                value={trusted}
+                onChange={(e) => setTrusted(e.target.value)}
+                placeholder="ou_…"
+              />
+              <button
+                className="secondary"
+                onClick={() =>
+                  void run(() =>
+                    api("/settings", "PATCH", {
+                      trustedFeishuUsers: trusted.split(/\s+/).filter(Boolean),
+                    }),
+                  )
+                }
+              >
+                保存名单
+              </button>
+            </>
+          )}
+          {tab === "飞书" && <OutboxPanel run={run} />}
+          {tab === "Monitor" && (
+            <>
+              <h3>入口绑定</h3>
+              {state.bindings.map((b) => (
+                <label className="field" key={b.key}>
+                  {b.key}
+                  <select
+                    value={b.sessionId}
+                    onChange={(e) =>
+                      void run(() =>
+                        api("/bindings", "POST", {
+                          key: b.key,
+                          sessionId: e.target.value,
+                        }),
+                      )
+                    }
+                  >
+                    {state.sessions.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+              <p className="description">
+                后台监听已配置的事件源，将新事件排入目标会话。无事件时不调用模型。
+              </p>
+              {state.subscriptions.map((s) => (
+                <div className="connection-card" key={s.id}>
+                  <strong>{s.name}</strong>
+                  <span>
+                    {s.kind} · {s.enabled ? "已启用" : "已停用"}
+                  </span>
+                  {state.monitorErrors[s.id] && (
+                    <small className="danger">
+                      {state.monitorErrors[s.id]}
+                    </small>
+                  )}
+                  <button
+                    onClick={() =>
+                      void run(() =>
+                        api("/subscriptions", "POST", {
+                          ...s,
+                          enabled: !s.enabled,
+                        }),
+                      )
+                    }
+                  >
+                    {s.enabled ? "停用" : "启用"}
+                  </button>
+                </div>
+              ))}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void run(() =>
+                    api("/subscriptions", "POST", {
+                      ...subscription,
+                      command:
+                        subscription.kind === "process"
+                          ? JSON.parse(subscription.command)
+                          : undefined,
+                      trustedSenders: subscription.trustedSenders
+                        .split(/\s+/)
+                        .filter(Boolean),
+                    }),
+                  );
+                }}
+              >
+                <Field
+                  label="订阅名称"
+                  value={subscription.name}
+                  onChange={(v) => setSubscription((s) => ({ ...s, name: v }))}
+                />
+                <label className="field">
+                  来源
+                  <select
+                    value={subscription.kind}
+                    onChange={(e) =>
+                      setSubscription((s) => ({ ...s, kind: e.target.value }))
+                    }
+                  >
+                    <option value="sse">SSE 事件</option>
+                    <option value="peer">Peer Relay</option>
+                    <option value="file">文件变化</option>
+                    <option value="process">进程输出</option>
+                  </select>
+                </label>
+                {["sse", "peer"].includes(subscription.kind) ? (
+                  <Field
+                    label="SSE 地址"
+                    value={subscription.url}
+                    onChange={(v) => setSubscription((s) => ({ ...s, url: v }))}
+                  />
+                ) : subscription.kind === "file" ? (
+                  <Field
+                    label="文件路径"
+                    value={subscription.path}
+                    onChange={(v) =>
+                      setSubscription((s) => ({ ...s, path: v }))
+                    }
+                  />
+                ) : (
+                  <Field
+                    label="命令参数数组"
+                    placeholder={'["程序", "参数"]'}
+                    value={subscription.command}
+                    onChange={(v) =>
+                      setSubscription((s) => ({ ...s, command: v }))
+                    }
+                  />
+                )}
+                {subscription.kind === "peer" && (
+                  <>
+                    <Field
+                      label="bro 的 Peer 身份"
+                      value={subscription.me}
+                      onChange={(v) =>
+                        setSubscription((s) => ({ ...s, me: v }))
+                      }
+                    />
+                    <Field
+                      label="Relay Token"
+                      type="password"
+                      value={subscription.token}
+                      onChange={(v) =>
+                        setSubscription((s) => ({ ...s, token: v }))
+                      }
+                    />
+                    <Field
+                      label="受信任的 Peer（空格分隔）"
+                      value={subscription.trustedSenders}
+                      onChange={(v) =>
+                        setSubscription((s) => ({ ...s, trustedSenders: v }))
+                      }
+                    />
+                  </>
+                )}
+                <label className="field">
+                  目标会话
+                  <select
+                    value={subscription.targetSessionId}
+                    onChange={(e) =>
+                      setSubscription((s) => ({
+                        ...s,
+                        targetSessionId: e.target.value,
+                      }))
+                    }
+                  >
+                    <option value="">选择会话</option>
+                    {state.sessions.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button className="primary">添加监听</button>
+              </form>
+            </>
+          )}
+          {tab === "资源" && <ResourcePanel state={state} run={run} />}
+          {tab === "记忆与实验" && (
+            <ExperimentPanel state={state} run={run} selected={selected} />
+          )}
+          {tab === "通用" && (
+            <>
+              <h3>工作目录</h3>
+              <p className="description">普通聊天和首次飞书会话使用此目录。</p>
+              <div className="path-value">{state.settings.defaultCwd}</div>
+              <button
+                className="secondary"
+                onClick={() =>
+                  void run(async () => {
+                    const path = await window.bro.directory();
+                    if (path)
+                      await api("/settings", "PATCH", { defaultCwd: path });
+                  })
+                }
+              >
+                更改目录
+              </button>
+              <hr />
+              <h3>后台服务</h3>
+              <label className="switch-row">
+                <span>登录电脑后启动后台</span>
+                <input
+                  type="checkbox"
+                  checked={loginItem}
+                  onChange={(e) =>
+                    void run(async () =>
+                      setLoginItem(
+                        await window.bro.loginItem(e.target.checked),
+                      ),
+                    )
+                  }
+                />
+              </label>
+              <p className="description">
+                关闭窗口后，Monitor 和正在运行的任务继续工作。
+              </p>
+              <button
+                className="secondary"
+                onClick={() =>
+                  void run(async () => {
+                    const info = await api("/diagnostics");
+                    await window.bro.open(info.dataRoot);
+                  })
+                }
+              >
+                打开数据目录
+              </button>
+              <hr />
+              <button
+                className="secondary"
+                onClick={() => void run(() => window.bro.stopHost())}
+              >
+                停止后台并退出（中断任务）
+              </button>
+              <hr />
+              <h3>Computer Use</h3>
+              <p className="description">
+                使用本机屏幕与辅助功能。检测到你操作键鼠时暂停，由你手动继续。首次使用需要系统权限。
+              </p>
+              <label className="switch-row">
+                <span>启用桌面操作</span>
+                <input
+                  type="checkbox"
+                  checked={state.settings.computer}
+                  onChange={(e) =>
+                    void run(() =>
+                      api("/settings", "PATCH", { computer: e.target.checked }),
+                    )
+                  }
+                />
+              </label>
+              <p className="description">{state.desktop.reason}</p>
+              <button
+                className="secondary"
+                onClick={() => void run(() => api("/desktop"))}
+              >
+                检测系统权限
+              </button>
+              {state.desktop.paused && (
+                <button
+                  className="secondary"
+                  onClick={() =>
+                    void run(() => api("/desktop/resume", "POST", {}))
+                  }
+                >
+                  手动继续桌面操作
+                </button>
+              )}
+              {state.desktop.capabilities && (
+                <pre className="capabilities">
+                  {JSON.stringify(state.desktop.capabilities, null, 2)}
+                </pre>
+              )}
+            </>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+function Field({
+  label,
+  value,
+  onChange,
+  type = "text",
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  type?: string;
+  placeholder?: string;
+}) {
+  return (
+    <label className="field">
+      {label}
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+      />
+    </label>
+  );
+}
+createRoot(document.getElementById("root")!).render(<App />);
