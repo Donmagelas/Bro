@@ -38,7 +38,9 @@
 - `scripts/probe-desktop.ts`：从 GUI 填写 API、实际写入中文空格文件名、提交批注、执行期间关窗、后台完成、重开恢复；草稿在重启后保留且按会话隔离。源码启动和 `.app` 启动均已通过；最终 `.app` 验证将工作目录移到应用内、PATH 限制为系统目录，并清除 Bun/开发页面覆盖，实际使用包内 Bun。
 - macOS 原生探针结果：Quartz、capture=true/granted、input=false/denied、AX=false/denied；Swift 监听器成功编译，预检返回“需要在系统设置中授予输入监控权限”。没有绕过权限，也未将此项标为通过。
 
-2026-09-29 本机证据目录：`/var/folders/yq/71gby3lj03d7ndwm99jbdd240000gn/T/bro-runtime-probe-ya4sqG`、`bro-controls-fLTwaG`、`bro-memory-probe-RZElUb`、`bro-desktop-probe-NkHxDX`（同一临时父目录）。源码探针和测试是可重复的证据入口；临时目录可能被系统清理。
+2026-09-29 本机证据目录：`/var/folders/yq/71gby3lj03d7ndwm99jbdd240000gn/T/bro-runtime-probe-ya4sqG`、`bro-controls-fLTwaG`、`bro-memory-probe-RZElUb`、`bro-desktop-probe-Djnc85`（同一临时父目录）。源码探针和测试是可重复的证据入口；临时目录可能被系统清理。
+
+双平台 CI：[运行 36578121307](https://github.com/Donmagelas/bro/actions/runs/36578121307) 在 `72b3d4e` 上成功完成 macOS 15、Windows 2025 的类型检查、21 项测试、OMP/runtime/controls/memory 四个真实运行探针及打包，两端 ZIP 均已上传。后续 `4130725` 只补模型上下文参数字段与归档按钮样式，本机重新打包和 GUI 验收通过；其 CI 运行中。Windows CI 不替代真实交互桌面、系统权限或账号验收。
 
 交付文件位于 `out/macos-arm64/bro.app` 和 `out/macos-arm64/bro-macos.zip`，不提交二进制与测试数据到 Git。代码提交在 `codex/initial-desktop`；本轮用户提供的协作约束禁止直接合入目标分支，因此不创建或合并 PR。
 
