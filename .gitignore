@@ -1,0 +1,27 @@
+# Dependencies and build output
+node_modules/
+dist/
+build/
+out/
+coverage/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+.omp/
+.pi/
+
+# Local runtime data
+*.log
+*.sqlite
+*.sqlite3
+*.db
+*-wal
+*-shm
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
