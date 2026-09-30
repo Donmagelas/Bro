@@ -102,6 +102,12 @@ export interface Project {
   path: string;
   archived: boolean;
 }
+export interface RulesDocument {
+  path: string;
+  content: string;
+  exists: boolean;
+  revision: string;
+}
 export interface Input {
   id: string;
   sessionId: string;

@@ -52,6 +52,92 @@ afterEach(async () => {
   }
 });
 
+test("rules editor writes the actual global and project context files and refreshes runtimes", async () => {
+  const host = setup();
+  const projectDir = join(host.store.root, "project");
+  mkdirSync(projectDir);
+  const project = host.store.addProject("规则项目", projectDir);
+  const refresh = spyOn(host.runtimes, "refresh");
+  const initial = (await req(host, "/rules")).data;
+  expect(initial.exists).toBe(false);
+  const content = "# Bro 约定\n请用中文回答。\n";
+  expect(
+    (await req(host, "/rules", { ...initial, content }, "PUT")).status,
+  ).toBe(200);
+  expect(
+    readFileSync(join(host.store.root, "agent", "AGENTS.md"), "utf8"),
+  ).toBe(content);
+  const projectUrl = `/rules?projectId=${project.id}`;
+  const projectDoc = (await req(host, projectUrl)).data;
+  const local = "# 项目约定\n运行本项目的测试。\n";
+  const saved = await req(
+    host,
+    "/rules",
+    { ...projectDoc, projectId: project.id, content: local },
+    "PUT",
+  );
+  expect(saved.status).toBe(200);
+  expect((await req(host, projectUrl)).data.content).toBe(local);
+  expect((await req(host, "/rules")).data.content).toBe(content);
+  expect(refresh).toHaveBeenCalledTimes(2);
+
+  const { loadResources } = await import("../packages/runtime-omp/resources");
+  const session = host.store.createSession({
+    projectId: project.id,
+    cwd: projectDir,
+  });
+  const loaded = await loadResources(host.store.root, session, []);
+  try {
+    expect(loaded.contextFiles).toEqual([
+      { path: initial.path, content },
+      { path: projectDoc.path, content: local },
+    ]);
+  } finally {
+    await loaded.mcpManager.disconnectAll();
+  }
+  expect(
+    (
+      await req(
+        host,
+        "/rules",
+        { ...saved.data, projectId: project.id, content: "" },
+        "PUT",
+      )
+    ).status,
+  ).toBe(200);
+  expect(readFileSync(join(projectDir, "AGENTS.md"), "utf8")).toBe("");
+});
+
+test("rules editor rejects stale edits, invalid scopes and unauthenticated writes without losing files", async () => {
+  const host = setup();
+  const initial = (await req(host, "/rules")).data;
+  writeFileSync(initial.path, "externally edited\n");
+  expect(
+    (await req(host, "/rules", { ...initial, content: "old draft" }, "PUT"))
+      .status,
+  ).toBe(400);
+  expect(readFileSync(initial.path, "utf8")).toBe("externally edited\n");
+  expect((await req(host, "/rules?projectId=missing")).status).toBe(400);
+  const latest = (await req(host, "/rules")).data;
+  for (const extra of [
+    { projectId: "missing" },
+    { projectId: 42 },
+    { content: null },
+    { content: "文".repeat(400000) },
+  ]) {
+    expect(
+      (await req(host, "/rules", { ...latest, ...extra }, "PUT")).status,
+    ).toBe(400);
+  }
+  const denied = await fetch(`http://127.0.0.1:${host.server.port}/rules`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...latest, content: "unauthorized" }),
+  });
+  expect(denied.status).toBe(401);
+  expect(readFileSync(initial.path, "utf8")).toBe("externally edited\n");
+});
+
 test("desktop permission endpoint authenticates and rejects unknown permissions before native requests", async () => {
   const host = setup();
   const native = spyOn(Desktop.prototype, "permissions").mockResolvedValue({

@@ -1,7 +1,15 @@
 import { join, resolve } from "node:path";
-import { mkdirSync, rmSync } from "node:fs";
-import { randomUUID } from "node:crypto";
-import type { Resource } from "../../packages/contracts";
+import {
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  realpathSync,
+} from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import type { Resource, RulesDocument } from "../../packages/contracts";
 import type { Store } from "./store";
 
 export class Resources {
@@ -15,6 +23,65 @@ export class Resources {
   }
   publicList() {
     return this.list().map(({ config, plugin, ...r }) => r);
+  }
+  rules(projectId: string | null = null): RulesDocument {
+    const project = projectId
+      ? this.store.projects().find((p) => p.id === projectId)
+      : null;
+    if (projectId && !project) throw new Error("项目不存在");
+    const path = join(
+      project?.path || join(this.store.root, "agent"),
+      "AGENTS.md",
+    );
+    let content = "",
+      exists = false;
+    try {
+      content = readFileSync(path, "utf8");
+      exists = true;
+    } catch (error: any) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    return {
+      path,
+      content,
+      exists,
+      revision: createHash("sha256")
+        .update(JSON.stringify([path, exists, content]))
+        .digest("hex"),
+    };
+  }
+  async saveRules(data: any) {
+    if (data.projectId != null && typeof data.projectId !== "string")
+      throw new Error("项目 ID 无效");
+    if (
+      typeof data.content !== "string" ||
+      Buffer.byteLength(data.content, "utf8") > 1024 * 1024
+    )
+      throw new Error("规则内容必须为文本且不超过 1 MB");
+    const current = this.rules(data.projectId || null);
+    if (data.revision !== current.revision)
+      throw new Error(
+        "AGENTS.md 已在其他地方修改，请重新读取后再保存；你的编辑仍保留在输入框中",
+      );
+    if (!data.projectId)
+      mkdirSync(join(this.store.root, "agent"), { recursive: true });
+    // Preserve existing symlinks and project file permissions when replacing content.
+    const path = current.exists ? realpathSync(current.path) : current.path;
+    const mode = current.exists
+      ? statSync(path).mode & 0o777
+      : data.projectId
+        ? 0o644
+        : 0o600;
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temporary, data.content, { mode });
+      renameSync(temporary, path);
+    } finally {
+      rmSync(temporary, { force: true });
+    }
+    const saved = this.rules(data.projectId || null);
+    await this.changed();
+    return saved;
   }
   async mutate(data: any) {
     const action = async () => {

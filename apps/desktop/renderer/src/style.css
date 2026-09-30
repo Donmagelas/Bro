@@ -1490,6 +1490,9 @@ svg {
   font-family: ui-monospace, "PingFang SC", monospace;
   line-height: 1.7;
 }
+.rules-editor {
+  min-height: 280px;
+}
 .status-row {
   display: flex;
   gap: 8px;

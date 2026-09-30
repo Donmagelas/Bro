@@ -22,6 +22,7 @@ import type {
 } from "../../../../packages/contracts";
 import "./style.css";
 import { ResourcePanel } from "./ResourcePanel";
+import { RulesPanel } from "./RulesPanel";
 import { MonitorPanel } from "./MonitorPanel";
 import { FeishuPanel } from "./FeishuPanel";
 import { ExperimentPanel } from "./ExperimentPanel";
@@ -1784,6 +1785,20 @@ function SettingsPanel({
   selected: string | null;
   openSession: (id: string) => void;
 }) {
+  const [rulesDirty, setRulesDirty] = useState(false);
+  const requestClose = useCallback(() => {
+    if (!rulesDirty || window.confirm("规则有未保存的编辑，确定关闭设置吗？"))
+      close();
+  }, [rulesDirty, close]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.isComposing) return;
+      event.stopImmediatePropagation();
+      requestClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [requestClose]);
   const [feedback, setFeedback] = useState<{
     error: boolean;
     text: string;
@@ -1885,7 +1900,7 @@ function SettingsPanel({
     <div
       className="modal-backdrop"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) close();
+        if (e.target === e.currentTarget) requestClose();
       }}
     >
       <section
@@ -1898,24 +1913,31 @@ function SettingsPanel({
         <aside>
           <div className="eyebrow">BASE CAMP</div>
           <h2>工作站设置</h2>
-          {["模型", "飞书", "Monitor", "资源", "记忆", "实验", "通用"].map(
-            (t) => (
-              <button
-                className={tab === t ? "active" : ""}
-                key={t}
-                onClick={() => setTab(t)}
-              >
-                <PixelIcon kind={rooms[t].icon} />
-                <span>{t}</span>
-              </button>
-            ),
-          )}
+          {[
+            "模型",
+            "飞书",
+            "Monitor",
+            "资源",
+            "规则",
+            "记忆",
+            "实验",
+            "通用",
+          ].map((t) => (
+            <button
+              className={tab === t ? "active" : ""}
+              key={t}
+              onClick={() => setTab(t)}
+            >
+              <PixelIcon kind={rooms[t].icon} />
+              <span>{t}</span>
+            </button>
+          ))}
         </aside>
         <div className="settings-content" ref={settingsContent}>
           <button
             className="modal-close icon-button"
             aria-label="关闭设置"
-            onClick={close}
+            onClick={requestClose}
           >
             <Icon name="close" />
           </button>
@@ -2228,6 +2250,13 @@ function SettingsPanel({
               />
             )}
             {tab === "资源" && <ResourcePanel state={state} run={run} />}
+            <div hidden={tab !== "规则"}>
+              <RulesPanel
+                state={state}
+                active={tab === "规则"}
+                onDirtyChange={setRulesDirty}
+              />
+            </div>
             {tab === "记忆" && (
               <MemoryPanel state={state} run={run} selected={selected} />
             )}

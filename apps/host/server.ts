@@ -784,6 +784,10 @@ export function createHost(
         }
         if (path === "/resources" && method === "POST")
           return json(await resources.mutate(await body(request)));
+        if (path === "/rules" && method === "GET")
+          return json(resources.rules(url.searchParams.get("projectId")));
+        if (path === "/rules" && method === "PUT")
+          return json(await resources.saveRules(await body(request)));
         if (path === "/bindings" && method === "POST") {
           const b = await body(request),
             session = store.session(str(b.sessionId, "会话 ID"));

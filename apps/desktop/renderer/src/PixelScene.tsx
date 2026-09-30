@@ -28,20 +28,26 @@ export const rooms: Record<
     icon: "box",
     color: "#e9ca87",
   },
+  规则: {
+    code: "05 / TOWN CHARTER",
+    title: "写下约定，默契同行。",
+    icon: "book",
+    color: "#ddbb82",
+  },
   记忆: {
-    code: "05 / ARCHIVE",
+    code: "06 / ARCHIVE",
     title: "留住经验，随时翻阅。",
     icon: "book",
     color: "#dfc394",
   },
   实验: {
-    code: "06 / FIELD LAB",
+    code: "07 / FIELD LAB",
     title: "试一点新东西。",
     icon: "flask",
     color: "#d6ba9f",
   },
   通用: {
-    code: "07 / BASE CAMP",
+    code: "08 / BASE CAMP",
     title: "把工作站调成你的样子。",
     icon: "gear",
     color: "#d4c78d",
@@ -84,9 +90,11 @@ export function PixelScene({ variant = "home" }: { variant?: string }) {
       ? "SUPPLIES"
       : variant === "飞书"
         ? "POST"
-        : variant === "记忆"
-          ? "ARCHIVE"
-          : "SALOON";
+        : variant === "规则"
+          ? "CHARTER"
+          : variant === "记忆"
+            ? "ARCHIVE"
+            : "SALOON";
   return (
     <svg
       className={`pixel-scene ${isHome ? "landscape" : "room-scene"}`}
