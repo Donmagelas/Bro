@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld("bro", {
   directory: () => ipcRenderer.invoke("bro:directory"),
   attachments: () => ipcRenderer.invoke("bro:attachments"),
   open: (target) => ipcRenderer.invoke("bro:open", target),
+  desktopPermissions: (action = "check") =>
+    ipcRenderer.invoke("bro:desktopPermissions", action),
   onEvent: (callback) => {
     const handler = (_event, data) => callback(data);
     ipcRenderer.on("bro:event", handler);

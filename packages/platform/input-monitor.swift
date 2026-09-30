@@ -1,13 +1,48 @@
 import Foundation
 import CoreGraphics
 import AppKit
+import ApplicationServices
+import ScreenCaptureKit
 
 func output(_ value: [String: Any]) {
     if let data = try? JSONSerialization.data(withJSONObject: value), let text = String(data: data, encoding: .utf8) {
         print(text); fflush(stdout)
     }
 }
-// Preflight only. Permission is granted by the user in System Settings.
+// Only an explicit click in Bro requests access. Normal monitor startup stays silent.
+if CommandLine.arguments.contains("--permissions") {
+    func reportPermissions() {
+        output([
+            "screen": CGPreflightScreenCaptureAccess(),
+            "accessibility": AXIsProcessTrusted(),
+            "inputMonitoring": CGPreflightListenEventAccess()
+        ])
+    }
+    let requested = CommandLine.arguments.last ?? ""
+    switch requested {
+    case "screen":
+        if !CGPreflightScreenCaptureAccess() {
+            // Current macOS may refuse to prompt via the legacy CG request.
+            // Enumerate capture sources to invoke ScreenCaptureKit consent;
+            // do not capture or retain any screen content.
+            SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: true) { _, _ in
+                reportPermissions()
+                exit(0)
+            }
+            dispatchMain()
+        }
+    case "accessibility":
+        if !AXIsProcessTrusted() {
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(options)
+        }
+    case "inputMonitoring":
+        if !CGPreflightListenEventAccess() { _ = CGRequestListenEventAccess() }
+    default: break
+    }
+    reportPermissions()
+    exit(0)
+}
 guard CGPreflightListenEventAccess() else {
     output(["type": "unavailable", "reason": "需要在系统设置中授予输入监控权限"]); exit(2)
 }

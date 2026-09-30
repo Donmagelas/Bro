@@ -23,7 +23,7 @@ export class InputMonitor {
     });
     return (this.starting = pending);
   }
-  private async launch(generation: number) {
+  private async command() {
     let command: string[];
     if (process.platform === "darwin") {
       const source = join(import.meta.dir, "input-monitor.swift");
@@ -56,6 +56,36 @@ export class InputMonitor {
         join(import.meta.dir, "input-monitor.ps1"),
       ];
     else throw new Error("此平台没有输入监控实现");
+    return command;
+  }
+  async permissions(permission?: string): Promise<Record<string, boolean>> {
+    if (
+      permission &&
+      !["screen", "accessibility", "inputMonitoring"].includes(permission)
+    )
+      throw new Error("未知系统权限");
+    const command = await this.command();
+    command.push(
+      ...(process.platform === "darwin"
+        ? ["--permissions", permission || "check"]
+        : ["-CheckOnly"]),
+    );
+    const child = Bun.spawn(command, {
+      stdout: "pipe",
+      stderr: "pipe",
+      windowsHide: true,
+    });
+    // macOS may wait for the user to dismiss its native permission prompt.
+    const [output, error, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    if (code !== 0) throw new Error(error.trim() || "无法检查系统权限");
+    return JSON.parse(output);
+  }
+  private async launch(generation: number) {
+    const command = await this.command();
     if (generation !== this.generation) throw new Error("输入监控启动已取消");
     const child = Bun.spawn(command, {
       stdout: "pipe",

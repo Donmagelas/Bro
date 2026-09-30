@@ -10,6 +10,7 @@ const {
 const { join, resolve, dirname, delimiter } = require("node:path");
 const fs = require("node:fs");
 const { spawn } = require("node:child_process");
+const { createPermissionFlow } = require("./permissions.cjs");
 app.setName("Bro");
 let window, info, streamController, connecting;
 const root =
@@ -143,6 +144,56 @@ async function subscribe() {
 ipcMain.handle("bro:request", (_event, path, method, body) =>
   request(path, method, body),
 );
+const permissionFlow = createPermissionFlow({
+  request,
+  openExternal: (url) => shell.openExternal(url),
+  report: (result) =>
+    window?.webContents.send("bro:event", {
+      type: "desktop_permissions",
+      ...result,
+    }),
+});
+let applyingPermissions;
+ipcMain.handle("bro:desktopPermissions", async (_event, action) => {
+  if (action === "cancel") return permissionFlow.cancel();
+  if (action === "apply") {
+    if (applyingPermissions) return applyingPermissions;
+    applyingPermissions = (async () => {
+      const state = await request("/state");
+      if (
+        state.sessions.some((session) =>
+          ["starting", "running", "waiting"].includes(session.status),
+        )
+      )
+        throw new Error("请等待运行中的任务结束后再应用授权");
+      permissionFlow.cancel();
+      streamController?.abort();
+      const pid = info.pid;
+      process.kill(pid, "SIGTERM");
+      for (let i = 0; i < 100; i++) {
+        let alive = true;
+        try {
+          process.kill(pid, 0);
+        } catch (error) {
+          if (error.code !== "ESRCH") throw error;
+          alive = false;
+        }
+        if (!alive) {
+          await connectHost();
+          return permissionFlow.check();
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      throw new Error("后台仍在退出，请稍后重新检查权限");
+    })().finally(() => {
+      applyingPermissions = undefined;
+      void subscribe();
+    });
+    return applyingPermissions;
+  }
+  if (action !== "check") throw new Error("无效权限操作");
+  return permissionFlow.check();
+});
 ipcMain.handle("bro:directory", async () => {
   const r = await dialog.showOpenDialog(window, {
     properties: ["openDirectory", "createDirectory"],
@@ -252,6 +303,15 @@ app
     window.webContents.setWindowOpenHandler(({ url }) => {
       if (/^https?:\/\//.test(url)) void shell.openExternal(url);
       return { action: "deny" };
+    });
+    window.on("focus", () => {
+      void permissionFlow.check(true).catch((error) =>
+        window?.webContents.send("bro:event", {
+          type: "desktop_permissions",
+          message: String(error),
+          error: true,
+        }),
+      );
     });
     window.webContents.on("will-navigate", (event, url) => {
       if (url !== window.webContents.getURL()) event.preventDefault();

@@ -45,6 +45,9 @@ declare global {
       directory: () => Promise<string | null>;
       attachments: () => Promise<Attachment[]>;
       open: (path: string) => Promise<void>;
+      desktopPermissions: (
+        action?: "check" | "cancel" | "apply",
+      ) => Promise<any>;
       onEvent: (fn: (event: any) => void) => () => void;
     };
   }
@@ -1817,6 +1820,23 @@ function SettingsPanel({
     settingsContent.current?.scrollTo({ top: 0 });
   }, [tab]);
   const [loginItem, setLoginItem] = useState(false);
+  const [permissionFeedback, setPermissionFeedback] = useState<string | null>(
+    null,
+  );
+  const [permissionRestart, setPermissionRestart] = useState(false);
+  useEffect(() => {
+    if (tab !== "通用") return;
+    const unsubscribe = window.bro.onEvent((event) => {
+      if (event.type === "desktop_permissions") {
+        setPermissionFeedback(event.message);
+        setPermissionRestart(!!event.restartRequired);
+      }
+    });
+    return () => {
+      unsubscribe();
+      void window.bro.desktopPermissions("cancel").catch(() => {});
+    };
+  }, [tab]);
   useEffect(() => {
     void window.bro
       .loginItem()
@@ -2290,10 +2310,35 @@ function SettingsPanel({
                 <p className="description">{state.desktop.reason}</p>
                 <button
                   className="secondary"
-                  onClick={() => void run(() => api("/desktop"))}
+                  onClick={() =>
+                    void run(async () => {
+                      setPermissionFeedback("正在检查系统权限…");
+                      try {
+                        await window.bro.desktopPermissions();
+                      } catch (error) {
+                        setPermissionFeedback(errorText(error));
+                        throw error;
+                      }
+                    })
+                  }
                 >
-                  检测系统权限
+                  检查系统权限
                 </button>
+                {permissionRestart && (
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      void run(() => window.bro.desktopPermissions("apply"))
+                    }
+                  >
+                    应用授权
+                  </button>
+                )}
+                {permissionFeedback && (
+                  <p className="description" role="status">
+                    {permissionFeedback}
+                  </p>
+                )}
                 {state.desktop.capabilities && (
                   <div className="capabilities">
                     {(

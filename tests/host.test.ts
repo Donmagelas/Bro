@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHost } from "../apps/host/server";
 import { AccountAuth } from "../apps/host/auth";
+import { Desktop } from "../apps/host/desktop";
 import { Runtimes } from "../apps/host/runtime";
 import { prepareRoot } from "../packages/platform/paths";
 
@@ -48,6 +49,44 @@ afterEach(async () => {
   for (const host of hosts.splice(0)) {
     await host.close();
     rmSync(host.store.root, { recursive: true, force: true });
+  }
+});
+
+test("desktop permission endpoint authenticates and rejects unknown permissions before native requests", async () => {
+  const host = setup();
+  const native = spyOn(Desktop.prototype, "permissions").mockResolvedValue({
+    platform: "darwin",
+    restartRequired: false,
+    permissions: {
+      screen: false,
+      accessibility: false,
+      inputMonitoring: false,
+    },
+  });
+  try {
+    const denied = await fetch(
+      `http://127.0.0.1:${host.server.port}/desktop/permissions`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      },
+    );
+    expect(denied.status).toBe(401);
+    expect(
+      (await req(host, "/desktop/permissions", { permission: "camera" }))
+        .status,
+    ).toBe(400);
+    expect(native).not.toHaveBeenCalled();
+    expect((await req(host, "/desktop/permissions", {})).status).toBe(200);
+    expect(native).toHaveBeenLastCalledWith(undefined);
+    expect(
+      (await req(host, "/desktop/permissions", { permission: "screen" }))
+        .status,
+    ).toBe(200);
+    expect(native).toHaveBeenLastCalledWith("screen");
+  } finally {
+    native.mockRestore();
   }
 });
 

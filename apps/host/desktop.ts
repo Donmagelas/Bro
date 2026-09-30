@@ -189,6 +189,28 @@ export class Desktop {
     this.changed();
     return this.state;
   }
+  async permissions(permission?: string) {
+    await this.refresh();
+    const permissions = await this.monitor.permissions(permission);
+    if (permission) await this.refresh();
+    if (process.platform === "win32") {
+      permissions.screen = !!this.state.capabilities?.capture;
+      permissions.accessibility =
+        !!this.state.capabilities?.ax && !!this.state.capabilities?.input;
+    }
+    const capabilities = this.state.capabilities;
+    const restartRequired =
+      process.platform === "darwin" &&
+      permissions.screen &&
+      permissions.accessibility &&
+      permissions.inputMonitoring &&
+      (!capabilities?.capture || !capabilities?.input || !capabilities?.ax);
+    return {
+      platform: process.platform,
+      permissions,
+      restartRequired: !!restartRequired,
+    };
+  }
   disable() {
     this.state.enabled = false;
     this.globalPause = true;

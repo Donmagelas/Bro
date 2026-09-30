@@ -52,6 +52,50 @@ const type = (target = "opaque-A", text = "abcdefghijklmnopqrstuvwxyz") => ({
 });
 const capture = { method: "capture" };
 
+test("newly granted permissions distinguish a stale native backend from usable tools", async () => {
+  const { desktop } = setup({
+    capabilities: { capture: false, input: false, ax: false },
+  });
+  desktop.state.enabled = false;
+  (desktop as any).monitor = {
+    async permissions() {
+      return { screen: true, accessibility: true, inputMonitoring: true };
+    },
+  };
+  expect((await desktop.permissions()).restartRequired).toBe(
+    process.platform === "darwin",
+  );
+  (desktop as any).nativeFactory = async () => ({
+    capabilities: { capture: true, input: true, ax: true },
+    close() {},
+  });
+  expect((await desktop.permissions()).restartRequired).toBe(false);
+});
+
+test("permission checks preserve disabled/paused state and reject prompting during desktop work", async () => {
+  const { desktop } = setup();
+  const requested: any[] = [];
+  (desktop as any).monitor = {
+    async permissions(key?: string) {
+      requested.push(key);
+      return { screen: true, accessibility: false, inputMonitoring: false };
+    },
+    async start() {},
+    stop() {},
+  };
+  desktop.state.enabled = false;
+  desktop.pause();
+  expect(
+    (await desktop.permissions("accessibility")).permissions.accessibility,
+  ).toBe(false);
+  expect(requested).toEqual(["accessibility"]);
+  expect(desktop.state.enabled).toBe(false);
+  expect(desktop.state.paused).toBe(true);
+  desktop.state.owner = "running-task";
+  await expect(desktop.permissions("screen")).rejects.toThrow("当前桌面操作");
+  expect(requested).toHaveLength(1);
+});
+
 test("background writing continues while human types/clicks another app or moves over target", async () => {
   const chunks: string[] = [];
   const { desktop } = setup({

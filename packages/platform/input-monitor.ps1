@@ -1,3 +1,4 @@
+param([switch]$CheckOnly)
 $ErrorActionPreference = 'Stop'
 Add-Type -ReferencedAssemblies System.Windows.Forms -TypeDefinition @'
 using System;
@@ -38,12 +39,17 @@ public static class BroInputMonitor {
     }
     return CallNextHookEx(mh,code,w,p);
   }
-  public static void Run() {
+  public static void Run(bool checkOnly) {
     kh=SetWindowsHookEx(13,keyboard,GetModuleHandle(null),0);mh=SetWindowsHookEx(14,mouse,GetModuleHandle(null),0);
     if(kh==IntPtr.Zero || mh==IntPtr.Zero) throw new Exception("无法建立用户输入监控");
+    if (checkOnly) {
+      UnhookWindowsHookEx(kh); UnhookWindowsHookEx(mh);
+      Console.WriteLine("{\"inputMonitoring\":true}");
+      return;
+    }
     Console.WriteLine("{\"type\":\"ready\"}");
     try { Application.Run(); } finally { UnhookWindowsHookEx(kh);UnhookWindowsHookEx(mh); }
   }
 }
 '@
-[BroInputMonitor]::Run()
+[BroInputMonitor]::Run($CheckOnly.IsPresent)

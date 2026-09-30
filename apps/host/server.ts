@@ -767,6 +767,17 @@ export function createHost(
         }
         if (path === "/desktop" && method === "GET")
           return json(await desktop.refresh());
+        if (path === "/desktop/permissions" && method === "POST") {
+          const b = await body(request);
+          if (
+            b.permission !== undefined &&
+            !["screen", "accessibility", "inputMonitoring"].includes(
+              b.permission,
+            )
+          )
+            throw new Error("未知系统权限");
+          return json(await desktop.permissions(b.permission));
+        }
         if (path === "/desktop/pause" && method === "POST") {
           desktop.pause();
           return json(desktop.state);
