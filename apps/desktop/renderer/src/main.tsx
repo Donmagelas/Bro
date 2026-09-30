@@ -638,14 +638,11 @@ function App() {
               <section className="welcome">
                 <div className="welcome-art">
                   <PixelScene />
-                  <span className="scene-tag">EST. 2026 · LOCAL FRONTIER</span>
                 </div>
                 <div className="welcome-copy">
-                  <div className="eyebrow">A LITTLE GRIT. A BIG IDEA.</div>
                   <h1>
                     大哥，今天砍谁？<span className="pixel-cursor">_</span>
                   </h1>
-                  <p>你的本机搭档已就位。写代码、找答案，让想法变成现实。</p>
                 </div>
                 <div className="suggestions">
                   {[

@@ -398,18 +398,6 @@ svg {
 .landscape {
   object-fit: contain;
 }
-.scene-tag {
-  position: absolute;
-  top: 14px;
-  left: 14px;
-  font-family: var(--pixel);
-  font-size: 8px;
-  letter-spacing: 0.5px;
-  color: #e7b576;
-  background: #63412f;
-  padding: 7px 9px;
-  border: 1px solid #9e7050;
-}
 .welcome-copy {
   padding: 29px 0 20px;
 }
@@ -423,19 +411,13 @@ svg {
   font-size: 29px;
   letter-spacing: -0.8px;
   font-weight: 750;
-  margin: 12px 0 10px;
+  margin: 0;
   line-height: 1.4;
 }
 .pixel-cursor {
   color: #b5603e;
   margin-left: 5px;
   animation: blink 2s steps(2, end) infinite;
-}
-.welcome p {
-  font-size: 12px;
-  color: var(--muted);
-  line-height: 1.9;
-  margin: 0;
 }
 .suggestions {
   display: grid;
@@ -1326,9 +1308,6 @@ svg {
   }
   .welcome h1 {
     font-size: 25px;
-  }
-  .welcome p {
-    font-size: 11px;
   }
   .suggestions button {
     min-height: 48px;
