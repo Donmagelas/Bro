@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import type { HostState } from "../../../../packages/contracts";
 import { PixelIcon } from "./PixelScene";
 
@@ -11,7 +11,7 @@ export function FeishuPanel({
   openSession,
 }: {
   state: HostState;
-  run: (fn: () => Promise<unknown>) => Promise<void>;
+  run: (fn: () => Promise<unknown>, success?: string | null) => Promise<void>;
   openSession: (id: string) => void;
 }) {
   const [draft, setDraft] = useState({
@@ -20,6 +20,34 @@ export function FeishuPanel({
     botId: state.feishu.botId || "",
     trusted: state.settings.trustedFeishuUsers.join("\n"),
   });
+  const [setupBusy, setSetupBusy] = useState(false);
+  const [replace, setReplace] = useState(false);
+  const setup = state.feishu.setup || { status: "idle" };
+  const activeSetup = ["starting", "waiting", "connecting"].includes(
+    setup.status,
+  );
+  useEffect(() => {
+    setDraft((d) => ({
+      ...d,
+      appId: state.feishu.appId || "",
+      appSecret: "",
+      botId: state.feishu.botId || "",
+    }));
+  }, [state.feishu.appId, state.feishu.botId]);
+  useEffect(() => {
+    setDraft((d) => ({
+      ...d,
+      trusted: state.settings.trustedFeishuUsers.join("\n"),
+    }));
+  }, [state.settings.trustedFeishuUsers.join("\n")]);
+  const setupAction = async (action: string, body: unknown = {}) => {
+    setSetupBusy(true);
+    try {
+      await run(() => api(`/feishu/setup/${action}`, body), null);
+    } finally {
+      setSetupBusy(false);
+    }
+  };
   const sessions = state.sessions.filter((s) => !s.archived);
   const feishuEnabled = state.feishu.enabled ?? state.feishu.configured;
   const bindings = state.bindings.filter((b) =>
@@ -54,6 +82,166 @@ export function FeishuPanel({
     );
   return (
     <div className="monitor-panel">
+      <section
+        className="monitor-section feishu-setup"
+        aria-label="扫码创建飞书应用"
+      >
+        <h3>扫码创建并连接</h3>
+        {setup.status === "waiting" && setup.verificationUrl ? (
+          <>
+            <p>
+              用飞书扫码，在官方页面完成创建。确认后 Bro
+              会自动连接，并将创建人设为受信任的人。
+            </p>
+            <img
+              className="feishu-qr"
+              src={setup.qrCode}
+              alt="飞书创建应用二维码"
+            />
+            <div className="monitor-card-actions">
+              <button
+                className="secondary"
+                onClick={() =>
+                  void run(() => window.bro.open(setup.verificationUrl!))
+                }
+              >
+                打开授权页面
+              </button>
+              <button
+                className="secondary"
+                disabled={setupBusy}
+                onClick={() => void setupAction("cancel")}
+              >
+                取消创建
+              </button>
+            </div>
+            <p className="description" role="status">
+              等待飞书确认 · 有效至{" "}
+              {setup.expiresAt
+                ? new Date(setup.expiresAt).toLocaleTimeString()
+                : "—"}
+            </p>
+          </>
+        ) : activeSetup ? (
+          <>
+            <p role="status">
+              {setup.status === "starting"
+                ? "正在准备二维码…"
+                : "应用已创建，正在检查并连接机器人…"}
+            </p>
+            <button
+              className="secondary"
+              disabled={setupBusy}
+              onClick={() => void setupAction("cancel")}
+            >
+              取消
+            </button>
+          </>
+        ) : setup.status === "pairing" ? (
+          <>
+            <p>
+              在飞书私聊这个机器人，发送以下配对码。绑定后仅发送该配对码的账号受信任，配对消息不会交给模型执行。
+            </p>
+            <code className="feishu-pairing-code">{setup.pairingCode}</code>
+            <p className="description">
+              有效至{" "}
+              {setup.pairingExpiresAt
+                ? new Date(setup.pairingExpiresAt).toLocaleTimeString()
+                : "—"}
+            </p>
+            <button
+              className="secondary"
+              disabled={setupBusy}
+              onClick={() => void setupAction("pair")}
+            >
+              重新生成配对码
+            </button>
+          </>
+        ) : setup.status === "ready" ? (
+          <>
+            <p role="status">
+              应用已保存，创建人已加入可信名单。可以去飞书给机器人发消息了。
+            </p>
+            <details className="monitor-technical">
+              <summary>无法对话？重新绑定本人</summary>
+              <p>生成一次性配对码，配对后可信名单仅保留该账号。</p>
+              <button
+                className="secondary"
+                disabled={setupBusy}
+                onClick={() => void setupAction("pair")}
+              >
+                生成配对码
+              </button>
+            </details>
+            {state.feishu.error && (
+              <button
+                className="secondary"
+                disabled={setupBusy}
+                onClick={() => void setupAction("retry")}
+              >
+                重试连接
+              </button>
+            )}
+          </>
+        ) : (
+          <>
+            {setup.error && (
+              <p className="notice" role="status">
+                {setup.error}
+              </p>
+            )}
+            {setup.status === "error" &&
+            (setup.appId || setup.verificationUrl) ? (
+              <button
+                className="primary"
+                disabled={setupBusy}
+                onClick={() => void setupAction("retry")}
+              >
+                {setup.appId ? "继续连接已创建的应用" : "继续检查创建结果"}
+              </button>
+            ) : replace ? (
+              <>
+                <p>
+                  新应用确认并校验成功后，将替换当前连接，可信名单重新绑定到创建人。原来的飞书会话记录保留。
+                </p>
+                <div className="monitor-card-actions">
+                  <button
+                    className="primary"
+                    disabled={setupBusy}
+                    onClick={() => {
+                      setReplace(false);
+                      void setupAction("start", { replace: true });
+                    }}
+                  >
+                    创建新应用并替换
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() => setReplace(false)}
+                  >
+                    返回
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p>用飞书扫码确认，自动完成应用配置和本人绑定。</p>
+                <button
+                  className="primary"
+                  disabled={setupBusy}
+                  onClick={() =>
+                    state.feishu.configured
+                      ? setReplace(true)
+                      : void setupAction("start")
+                  }
+                >
+                  {state.feishu.configured ? "创建新应用" : "扫码创建"}
+                </button>
+              </>
+            )}
+          </>
+        )}
+      </section>
       {state.feishu.configured && (
         <article className="monitor-connection" aria-label="飞书连接">
           <div className="monitor-connection-header">
@@ -85,6 +273,7 @@ export function FeishuPanel({
             <button
               className="secondary"
               type="button"
+              disabled={activeSetup || setupBusy}
               onClick={() => void toggleFeishu()}
             >
               {feishuEnabled ? "停用" : "启用"}
@@ -93,8 +282,10 @@ export function FeishuPanel({
         </article>
       )}
 
-      <details className="monitor-section" open={!state.feishu.configured}>
-        <summary>连接配置</summary>
+      <details className="monitor-section">
+        <summary>
+          {state.feishu.configured ? "连接配置" : "连接已有应用"}
+        </summary>
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -126,14 +317,18 @@ export function FeishuPanel({
               placeholder: "留空自动获取",
             })}
           </details>
-          <button className="primary">
+          <button className="primary" disabled={activeSetup || setupBusy}>
             {state.feishu.configured ? "保存配置" : "保存并连接"}
           </button>
         </form>
       </details>
       <details
         className="monitor-section"
-        open={!state.settings.trustedFeishuUsers.length}
+        open={
+          state.feishu.configured &&
+          !state.settings.trustedFeishuUsers.length &&
+          setup.status !== "pairing"
+        }
       >
         <summary>
           受信任的人 · {state.settings.trustedFeishuUsers.length} 人

@@ -173,6 +173,26 @@ export interface Resource {
   plugin?: any;
   config?: Record<string, unknown>;
 }
+export interface FeishuSetupState {
+  status:
+    | "idle"
+    | "starting"
+    | "waiting"
+    | "connecting"
+    | "ready"
+    | "pairing"
+    | "error"
+    | "expired"
+    | "cancelled";
+  verificationUrl?: string;
+  qrCode?: string;
+  expiresAt?: number;
+  appId?: string;
+  ownerOpenId?: string;
+  pairingCode?: string;
+  pairingExpiresAt?: number;
+  error?: string;
+}
 export interface HostState {
   version: string;
   sessions: Session[];
@@ -183,6 +203,7 @@ export interface HostState {
   delegations: Delegation[];
   subscriptions: Subscription[];
   feishu: {
+    setup?: FeishuSetupState;
     configured: boolean;
     connected: boolean;
     enabled?: boolean;

@@ -33,7 +33,8 @@
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-markdown": "10.1.0",
-    "remark-gfm": "4.0.1"
+    "remark-gfm": "4.0.1",
+    "qrcode-generator": "1.4.4"
   },
   "devDependencies": {
     "@types/bun": "1.4.2",

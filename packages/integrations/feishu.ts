@@ -11,6 +11,7 @@ export interface FeishuConfig {
   enabled: boolean;
 }
 export class Feishu {
+  onPairingMessage?: (event: any, config: FeishuConfig) => boolean;
   private client?: lark.Client;
   private socket?: lark.WSClient;
   private flushing?: Promise<void>;
@@ -127,6 +128,7 @@ export class Feishu {
     generation: number,
   ) {
     if (this.stopped) return;
+    if (this.onPairingMessage?.(event, config)) return;
     const m = event.message,
       sender = event.sender?.sender_id?.open_id;
     if (

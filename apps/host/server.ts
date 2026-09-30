@@ -21,6 +21,7 @@ import { AccountAuth } from "./auth";
 import { Resources } from "./resources";
 import { Desktop } from "./desktop";
 import { Feishu, type FeishuConfig } from "../../packages/integrations/feishu";
+import { FeishuSetup } from "../../packages/integrations/feishu-setup";
 import { Monitor } from "../../packages/integrations/monitor";
 import {
   VERSION,
@@ -52,7 +53,12 @@ const allowed = (v: string, values: string[], name: string) => {
 export function createHost(
   root: string,
   token: string,
-  options: { port?: number; runtimeFactory?: typeof Runtimes } = {},
+  options: {
+    port?: number;
+    runtimeFactory?: typeof Runtimes;
+    feishuSetupFetch?: typeof fetch;
+    feishuSetupWait?: (ms: number, signal: AbortSignal) => Promise<unknown>;
+  } = {},
 ) {
   const store = new Store(root);
   store.recover();
@@ -76,6 +82,15 @@ export function createHost(
     },
   );
   const feishu = new Feishu(store, changed, (id) => runtimes.wake(id));
+  const feishuSetup = new FeishuSetup(
+    store,
+    feishu,
+    changed,
+    options.feishuSetupFetch,
+    options.feishuSetupWait,
+  );
+  feishu.onPairingMessage = (event, config) =>
+    feishuSetup.receivePairing(event, config);
   const monitor = new Monitor(store, (id) => runtimes.wake(id), changed);
   const desktop = new Desktop(root, changed, undefined, (message) => {
     for (const listener of listeners)
@@ -96,6 +111,7 @@ export function createHost(
       delegations: store.delegations(),
       subscriptions: store.subscriptions(),
       feishu: {
+        setup: feishuSetup.state(),
         ...feishu.status,
         configured: !!savedFeishu,
         enabled: savedFeishu?.enabled === true,
@@ -805,6 +821,16 @@ export function createHost(
           changed();
           return json({ saved: true });
         }
+        if (path === "/feishu/setup/start" && method === "POST")
+          return json(
+            feishuSetup.start((await body(request)).replace === true),
+          );
+        if (path === "/feishu/setup/retry" && method === "POST")
+          return json(feishuSetup.retry());
+        if (path === "/feishu/setup/cancel" && method === "POST")
+          return json(await feishuSetup.cancel());
+        if (path === "/feishu/setup/pair" && method === "POST")
+          return json(feishuSetup.pair());
         if (path === "/feishu" && method === "POST") {
           const b = await body(request);
           const previous = store.getConfig<FeishuConfig | null>("feishu", null);
@@ -818,6 +844,14 @@ export function createHost(
             enabled: b.enabled !== false,
           };
           if (!config.appSecret) throw new Error("请填写 App Secret");
+          if (previous?.appId !== appId) await feishuSetup.clear();
+          else await feishuSetup.cancel();
+          await feishu.stop();
+          if (previous?.appId !== appId)
+            store.setConfig("settings", {
+              ...store.getSettings(),
+              trustedFeishuUsers: [],
+            });
           store.setConfig("feishu", config);
           void feishu.start();
           changed();
@@ -967,6 +1001,7 @@ export function createHost(
       changed();
     });
   void feishu.start();
+  feishuSetup.resume();
   monitor.reload();
   runtimes.wakeAll();
   return {
@@ -974,11 +1009,13 @@ export function createHost(
     store,
     runtimes,
     feishu,
+    feishuSetup,
     monitor,
     state,
     async close() {
       if (closing) return;
       closing = true;
+      await feishuSetup.close();
       await oauth.close();
       await monitor.stop();
       await feishu.stop();

@@ -1805,7 +1805,10 @@ function SettingsPanel({
   } | null>(null);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
-  const run = async (fn: () => Promise<unknown>) => {
+  const run = async (
+    fn: () => Promise<unknown>,
+    success: string | null = "操作完成",
+  ) => {
     if (savingRef.current) return;
     savingRef.current = true;
     setSaving(true);
@@ -1813,7 +1816,7 @@ function SettingsPanel({
     await runGlobal(async () => {
       try {
         const value = await fn();
-        setFeedback({ error: false, text: "操作完成" });
+        setFeedback(success ? { error: false, text: success } : null);
         return value;
       } catch (error) {
         setFeedback({

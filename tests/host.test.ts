@@ -735,3 +735,44 @@ test("desktop resumes from a fresh GUI or Feishu task, never the paused task or 
   ).rejects.toThrow("新的继续指令");
   expect(desktop.paused).toBe(true);
 });
+
+test("Feishu onboarding endpoints require host auth and never expose device credentials", async () => {
+  const root = mkdtempSync(join(tmpdir(), "bro-host-setup-"));
+  prepareRoot(root);
+  let calls = 0;
+  const host = createHost(root, "test-token", {
+    runtimeFactory: NoModelRuntime,
+    feishuSetupFetch: (async (_url: any, init: RequestInit) => {
+      calls++;
+      return Response.json(
+        new URLSearchParams(String(init.body)).get("action") === "begin"
+          ? { device_code: "private-device", user_code: "test", expire_in: 600 }
+          : { error: "authorization_pending" },
+      );
+    }) as typeof fetch,
+  });
+  hosts.push(host);
+  for (const action of ["start", "retry", "cancel", "pair"]) {
+    const response = await fetch(
+      `http://127.0.0.1:${host.server.port}/feishu/setup/${action}`,
+      { method: "POST" },
+    );
+    expect(response.status).toBe(401);
+  }
+  expect(calls).toBe(0);
+  expect((await req(host, "/feishu/setup/start", {})).status).toBe(200);
+  for (
+    let i = 0;
+    i < 100 && host.feishuSetup.state().status === "starting";
+    i++
+  )
+    await Bun.sleep(5);
+  const current = (await req(host, "/state")).data;
+  expect(current.feishu.setup.status).toBe("waiting");
+  expect(current.feishu.setup.qrCode).toStartWith("data:image/gif");
+  expect(JSON.stringify(current)).not.toContain("private-device");
+  expect((await req(host, "/feishu/setup/cancel", {})).data.status).toBe(
+    "cancelled",
+  );
+  expect(host.store.getSettings().trustedFeishuUsers).toEqual([]);
+});

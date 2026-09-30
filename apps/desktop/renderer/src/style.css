@@ -1297,6 +1297,24 @@ svg {
 .monitor-category {
   margin-top: 28px;
 }
+.feishu-setup p {
+  line-height: 1.6;
+}
+.feishu-qr {
+  display: block;
+  width: 256px;
+  max-width: 100%;
+  height: auto;
+  margin: 20px 0;
+  border: 2px solid #b89a70;
+}
+.feishu-pairing-code {
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 14px;
+  background: #f3e5c7;
+  user-select: all;
+}
 .monitor-category-count {
   margin-left: 10px;
   color: #896b4c;
