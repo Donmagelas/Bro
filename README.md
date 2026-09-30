@@ -64,7 +64,7 @@ bun run probe:desktop
 bun run package
 ```
 
-探针使用本机确定性模型接口，运行的是实际 OMP 进程和工具；它们不验证真实账号授权或模型质量。`probe:runtime` 可通过 `BRO_PROBE_BROWSER` 指定 Chrome/Chromium 可执行文件，额外验证独立无头浏览器。`probe:memory` 验证原生 Mnemopi 的自动保存和 FTS 检索/注入、on/off；默认向量和抽取模型仍需验收。
+探针使用本机确定性模型接口，运行的是实际 OMP 进程和工具；它们不验证真实账号授权或模型质量。`probe:runtime` 可通过 `BRO_PROBE_BROWSER` 指定 Chrome/Chromium 可执行文件，额外验证独立无头浏览器。`probe:memory` 验证原生 Mnemopi 的自动保存和 FTS 检索/注入、on/off。首版使用文本检索，默认向量模型与语义检索暂缓；smol 抽取模型仍需验收。
 
 在 macOS 打包会生成 `out/macos-arm64/bro.app` 与 ZIP，包含 Bun、生产依赖和预编译输入监听器，使用本地 ad-hoc 签名。Windows 原生打包脚本生成 `out/windows-x64/bro/bro.exe` 和 ZIP；当前未在 Windows 实机完成验收。构建流程见 `.github/workflows/check.yml`。可通过 `BRO_NPM_REGISTRY` 为打包时的依赖安装指定镜像。
 

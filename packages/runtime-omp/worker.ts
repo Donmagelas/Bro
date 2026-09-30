@@ -95,7 +95,7 @@ async function initialize(value: typeof config) {
       ),
       "mnemopi.bank": "bro",
       "mnemopi.scoping": "per-project",
-      "mnemopi.embeddingVariant": "multilingual",
+      "mnemopi.noEmbeddings": true,
       "compaction.methodOrder": ["remote", "handoff", "shake", "soft"],
     },
   });

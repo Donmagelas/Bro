@@ -1,6 +1,6 @@
 # bro 实施方案
 
-状态：已进入实现，形成 0.1 开发版和本机 macOS arm64 应用包；以下记录已验证部分和缺口，首版整体尚未验收完成。更新：2026-09-29。
+状态：已进入实现，形成 0.1 开发版和本机 macOS arm64 应用包；以下记录已验证部分和缺口，首版整体尚未验收完成。更新：2026-09-30。
 
 ## 目标与方案引用
 
@@ -25,7 +25,7 @@
 | 07 | 真实两个 OMP 进程交办；目标写文件；结果排回来源，原始关联数据库测试通过 | IM 多个并发请求的真实异步回包 |
 | 08 | 原生 Desktop 后端、批次锁、分段输入检查、双平台监听器；macOS Swift 编译；独立无头 Chrome 填表/点击/读回通过 | 当前 AX/input/input-monitor 权限不足；真人接管、Windows 和共享浏览器未验收 |
 | 09 | bro 原生工具可作为外部应用操作入口；没有修改 Codex 的内部状态文件 | Codex 真实目标会话收发及专用关联流程尚未完成 |
-| 10 | Mnemopi 独立数据库与开关；FTS 配置下实际自动 retain、新会话 recall/注入、off 不注入通过；状态/搜索入口 | 默认多语言向量、smol 抽取、管理和并发验收 |
+| 10 | Mnemopi 独立数据库与开关；FTS 配置下实际自动 retain、新会话 recall/注入、off 不注入通过；状态/搜索入口；首版固定使用文本检索 | smol 抽取、管理和并发验收；默认向量检索已暂缓 |
 | 11 | 三个独立策略和 native Jev/Laya 客户端、预算/错误回退、比较日志；Skill 三态通过真实 OMP hook 测试 | 上下文/压缩长历史端到端、中文质量/费用评测 |
 | 12 | 本机 macOS arm64 应用包和 ZIP；包内 Bun/依赖启动、GUI→OMP→文件→关窗→重开通过；Windows 构建流程 | Windows 实机、正式签名公证、清洁机器和完整范围验收 |
 
@@ -34,15 +34,17 @@
 - `scripts/probe-omp.ts`：真实 OMP 工具写文件和进程退出后的权威历史恢复。
 - `scripts/probe-runtime.ts`：真实本地插件/MCP/Skill、独立会话交办及返回、插件禁用、Skill 旁路/实验/正常恢复。指定 `BRO_PROBE_BROWSER` 后，在独立 Chrome profile 中填表、点击并读回真实页面结果；本机已通过。
 - `scripts/probe-controls.ts`：真实 provider 请求顺序 `FIRST → STEER → SECOND`；steer 批注进入历史；stop 中断请求且持久状态为 cancelled。手动压缩期间新输入仍排队，运行中关闭宿主会收拢执行进程；OMP 上下文统计可读。
-- `scripts/probe-memory.ts`：实际 OMP + Mnemopi 自动保存、跨新会话检索和注入、关闭后新会话不注入。此探针使用原生 FTS-only、`llmMode=none` 配置；默认多语言 embedding 和抽取模型尚未验收。
+- `scripts/probe-memory.ts`：实际 OMP + Mnemopi 自动保存、跨新会话检索和注入、关闭后新会话不注入。此探针沿用 bro 原生 FTS-only 基线，只为确定性验证设置 `llmMode=none` 和每轮保存；默认向量检索已暂缓，smol 抽取模型尚未验收。
 - `scripts/probe-desktop.ts`：从 GUI 填写 API、实际写入中文空格文件名、提交批注、执行期间关窗、后台完成、重开恢复；草稿在重启后保留且按会话隔离。源码启动和 `.app` 启动均已通过；最终 `.app` 验证将工作目录移到应用内、PATH 限制为系统目录，并清除 Bun/开发页面覆盖，实际使用包内 Bun。
 - macOS 原生探针结果：Quartz、capture=true/granted、input=false/denied、AX=false/denied；Swift 监听器成功编译，预检返回“需要在系统设置中授予输入监控权限”。没有绕过权限，也未将此项标为通过。
 
 2026-09-29 本机证据目录：`/var/folders/yq/71gby3lj03d7ndwm99jbdd240000gn/T/bro-runtime-probe-ya4sqG`、`bro-controls-fLTwaG`、`bro-memory-probe-RZElUb`、`bro-desktop-probe-Djnc85`（同一临时父目录）。源码探针和测试是可重复的证据入口；临时目录可能被系统清理。
 
-双平台 CI：[运行 36578121307](https://github.com/Donmagelas/bro/actions/runs/36578121307) 在 `72b3d4e` 上成功完成 macOS 15、Windows 2025 的类型检查、21 项测试、OMP/runtime/controls/memory 四个真实运行探针及打包，两端 ZIP 均已上传。后续 `4130725` 只补模型上下文参数字段与归档按钮样式，本机重新打包和 GUI 验收通过；其 CI 运行中。Windows CI 不替代真实交互桌面、系统权限或账号验收。
+2026-09-30 向量检索暂缓配置：`bun run check` 和 `bun run probe:memory` 通过。记忆探针不再自行设置 `noEmbeddings`，直接验证 bro 的文本检索基线；自动保存、新会话检索/注入、关闭后不注入均通过。证据目录为同一临时父目录下的 `bro-memory-probe-3CDLGW`；抽取模型仍未验收。
 
-交付文件位于 `out/macos-arm64/bro.app` 和 `out/macos-arm64/bro-macos.zip`，不提交二进制与测试数据到 Git。代码提交在 `codex/initial-desktop`；本轮用户提供的协作约束禁止直接合入目标分支，因此不创建或合并 PR。
+双平台 CI：[运行 36578121307](https://github.com/Donmagelas/bro/actions/runs/36578121307) 在 `72b3d4e` 上成功完成 macOS 15、Windows 2025 的类型检查、21 项测试、OMP/runtime/controls/memory 四个真实运行探针及打包，两端 ZIP 均已上传。后续 `4130725` 的本机重新打包和 GUI 验收通过；[运行 36579225416](https://github.com/Donmagelas/bro/actions/runs/36579225416) 也已成功。Windows CI 不替代真实交互桌面、系统权限或账号验收。
+
+交付文件位于 `out/macos-arm64/bro.app` 和 `out/macos-arm64/bro-macos.zip`，不提交二进制与测试数据到 Git。按用户最新仓库约束直接提交并推送 `main`，不创建 PR。上述本机应用包为此前构建，不包含 2026-09-30 的向量检索暂缓配置。
 
 具体输入需求、未完成实现与验证条件集中记录在 [待处理事项](open-issues.md)，不将这些必需项视为已完成。
 
@@ -139,7 +141,7 @@
 
 ### 10. 接入 Mnemopi 和持久 on/off 开关
 
-- **预期结果**：开启时按 Mnemopi 原有机制自动保留、检索、注入和整理；关闭后停止模块读写及后续注入，已有数据保留，普通历史和压缩继续工作。GUI 显示开关、实际生效状态及后端支持的管理操作，重开可继续使用旧记忆。
+- **预期结果**：开启时按 Mnemopi 原有机制自动保留、文本检索、注入和整理；首版设置 `mnemopi.noEmbeddings: true`，默认向量模型下载与语义检索暂缓。关闭后停止模块读写及后续注入，已有数据保留，普通历史和压缩继续工作。GUI 显示开关、实际生效状态及后端支持的管理操作，重开可继续使用旧记忆。
 - **改动区域**：`packages/runtime-omp/` 的后端配置/生命周期与作用域适配；宿主的设置传播和共享存储协调；GUI 记忆设置。复用 Mnemopi 原有 SQLite 与 bank/project 配置，不让宿主另存一份记忆。默认工作目录相同的群来源也不得被自动混合为所有会话的全局记忆；作用域仅控制默认保存/检索，不增加可信用户之间的访问权限等级。
 - **依赖**：步骤 03、06 的会话与来源标识，以及步骤 01 确认的后端作用域入口；后端实际需要的模型、索引或本机依赖按固定版本配置。开关变化在确定的运行边界生效，先处理在途后端任务，再刷新后续注入状态。
 - **验证方法**：真实完成自动积累、新会话 recall、支持的查看/编辑/删除及重启恢复；并发会话写入不损坏存储，跨项目/群来源不意外混入记忆。运行中关闭后检查无新 retain/recall/注入，重新开启可找回旧内容；不将先前已进入会话历史的内容消失作为关闭条件。模型或后端失败如实显示状态，不能将启用开关视为记忆已可用。

@@ -5,11 +5,11 @@ import { prepareRoot } from "../packages/platform/paths";
 import { createHost } from "../apps/host/server";
 const root = mkdtempSync(join(tmpdir(), "bro-memory-probe-"));
 prepareRoot(root);
-// Exercise native automatic retain/recall without downloading an embedding model
-// or contacting a paid extraction service. Production defaults are unchanged.
+// Use bro's FTS-only baseline; disable extraction and retain every turn to make
+// native automatic retain/recall deterministic without an extraction model.
 writeFileSync(
   join(root, "agent/config.yml"),
-  "mnemopi:\n  noEmbeddings: true\n  llmMode: none\n  retainEveryNTurns: 1\n",
+  "mnemopi:\n  llmMode: none\n  retainEveryNTurns: 1\n",
 );
 let lastContext = "";
 const provider = Bun.serve({
@@ -123,7 +123,7 @@ try {
         "off prevents fresh-session recall",
       ],
       limits:
-        "FTS-only fixture; multilingual embeddings and production extraction model remain unverified",
+        "bro FTS-only baseline; vector retrieval is deferred; production extraction model remains unverified",
     }),
   );
 } catch (e) {
