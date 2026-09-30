@@ -25,6 +25,7 @@ import { ResourcePanel } from "./ResourcePanel";
 import { MonitorPanel } from "./MonitorPanel";
 import { FeishuPanel } from "./FeishuPanel";
 import { ExperimentPanel } from "./ExperimentPanel";
+import { MemoryPanel } from "./MemoryPanel";
 import { useDrafts } from "./useDrafts";
 import {
   messageText as textOf,
@@ -1850,7 +1851,7 @@ function SettingsPanel({
         <aside>
           <div className="eyebrow">BASE CAMP</div>
           <h2>工作站设置</h2>
-          {["模型", "飞书", "Monitor", "资源", "记忆与实验", "通用"].map(
+          {["模型", "飞书", "Monitor", "资源", "记忆", "实验", "通用"].map(
             (t) => (
               <button
                 className={tab === t ? "active" : ""}
@@ -2180,9 +2181,10 @@ function SettingsPanel({
               />
             )}
             {tab === "资源" && <ResourcePanel state={state} run={run} />}
-            {tab === "记忆与实验" && (
-              <ExperimentPanel state={state} run={run} selected={selected} />
+            {tab === "记忆" && (
+              <MemoryPanel state={state} run={run} selected={selected} />
             )}
+            {tab === "实验" && <ExperimentPanel state={state} run={run} />}
             {tab === "通用" && (
               <>
                 <h3>工作目录</h3>

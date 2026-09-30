@@ -28,14 +28,20 @@ export const rooms: Record<
     icon: "box",
     color: "#e9ca87",
   },
-  记忆与实验: {
-    code: "05 / FIELD LAB",
-    title: "保留好想法，试一点新东西。",
+  记忆: {
+    code: "05 / ARCHIVE",
+    title: "留住经验，随时翻阅。",
+    icon: "book",
+    color: "#dfc394",
+  },
+  实验: {
+    code: "06 / FIELD LAB",
+    title: "试一点新东西。",
     icon: "flask",
     color: "#d6ba9f",
   },
   通用: {
-    code: "06 / BASE CAMP",
+    code: "07 / BASE CAMP",
     title: "把工作站调成你的样子。",
     icon: "gear",
     color: "#d4c78d",
@@ -44,6 +50,7 @@ export const rooms: Record<
 
 export function PixelIcon({ kind = "chip" }: { kind?: string }) {
   const shapes: Record<string, string> = {
+    book: "M0 3h9v3h6V3h9v18h-9v3H9v-3H0zm3 3v12h6V6zm12 0v12h6V6z",
     cactus: "M9 0h6v12h3V6h6v12h-9v6H9v-6H0V9h6v3h3z",
     chip: "M6 3h12v3h3v12h-3v3H6v-3H3V6h3zm3 6v6h6V9zM0 8h3v3H0zm0 6h3v3H0zm21-6h3v3h-3zm0 6h3v3h-3zM8 0h3v3H8zm6 0h3v3h-3zM8 21h3v3H8zm6 0h3v3h-3z",
     mail: "M0 3h24v18H0zm3 3v3h3v3h3v3h6v-3h3V9h3V6h-3v3h-3v3H9V9H6V6zm0 9v3h18v-3h-3v3H6v-3z",
@@ -73,7 +80,13 @@ export function PixelIcon({ kind = "chip" }: { kind?: string }) {
 export function PixelScene({ variant = "home" }: { variant?: string }) {
   const isHome = variant === "home";
   const building =
-    variant === "资源" ? "SUPPLIES" : variant === "飞书" ? "POST" : "SALOON";
+    variant === "资源"
+      ? "SUPPLIES"
+      : variant === "飞书"
+        ? "POST"
+        : variant === "记忆"
+          ? "ARCHIVE"
+          : "SALOON";
   return (
     <svg
       className={`pixel-scene ${isHome ? "landscape" : "room-scene"}`}
@@ -144,7 +157,7 @@ export function PixelScene({ variant = "home" }: { variant?: string }) {
           <rect x="153" y="24" width="4" height="16" fill="#4b3b30" />
           <path d="M157 24h20v10h-20z" fill="#e4d09a" />
         </g>
-      ) : variant === "记忆与实验" ? (
+      ) : variant === "实验" ? (
         <g>
           <path d="M106 109V73h93v36zM110 67h85v7h-85z" fill="#79543a" />
           <rect x="116" y="82" width="32" height="18" fill="#503f30" />

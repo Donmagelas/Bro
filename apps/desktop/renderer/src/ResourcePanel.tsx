@@ -25,6 +25,9 @@ export function ResourcePanel({
         setWorking(false);
       }
     });
+  const loadRecords = Object.entries(state.runtimeInfo).filter(
+    ([, info]) => !!info,
+  );
   return (
     <>
       <p className="description">
@@ -74,33 +77,7 @@ export function ResourcePanel({
           </div>
         </div>
       ))}
-      {Object.entries(state.runtimeInfo)
-        .filter(([, info]) => !!info)
-        .map(([id, info]) => (
-          <details className="connection-card" key={id}>
-            <summary>
-              {state.sessions.find((s) => s.id === id)?.title || id} ·
-              最近加载记录
-            </summary>
-            <small>
-              {new Date(info!.at).toLocaleString()}
-              {state.pendingRefresh.includes(id) ? " · 等待刷新" : ""}
-            </small>
-            <p>Skill：{info!.skills.map((s) => s.name).join("、") || "无"}</p>
-            <p>已连接 MCP：{info!.mcp.join("、") || "无"}</p>
-            <details>
-              <summary>{info!.tools.length} 个可用工具</summary>
-              <small>{info!.tools.join("、")}</small>
-            </details>
-            {info!.warnings.map((warning, n) => (
-              <p className="danger" key={n}>
-                {typeof warning === "string"
-                  ? warning
-                  : JSON.stringify(warning)}
-              </p>
-            ))}
-          </details>
-        ))}
+
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -169,6 +146,34 @@ export function ResourcePanel({
           {working ? "处理中…" : "安装 / 保存"}
         </button>
       </form>
+      <details className="resource-load-history">
+        <summary>最近加载记录</summary>
+        {!loadRecords.length && <p className="empty-note">暂无加载记录</p>}
+        {loadRecords.map(([id, info]) => (
+          <details className="connection-card" key={id}>
+            <summary>
+              {state.sessions.find((s) => s.id === id)?.title || id}
+            </summary>
+            <small>
+              {new Date(info!.at).toLocaleString()}
+              {state.pendingRefresh.includes(id) ? " · 等待刷新" : ""}
+            </small>
+            <p>Skill：{info!.skills.map((s) => s.name).join("、") || "无"}</p>
+            <p>已连接 MCP：{info!.mcp.join("、") || "无"}</p>
+            <details>
+              <summary>{info!.tools.length} 个可用工具</summary>
+              <small>{info!.tools.join("、")}</small>
+            </details>
+            {info!.warnings.map((warning, n) => (
+              <p className="danger" key={n}>
+                {typeof warning === "string"
+                  ? warning
+                  : JSON.stringify(warning)}
+              </p>
+            ))}
+          </details>
+        ))}
+      </details>
     </>
   );
 }

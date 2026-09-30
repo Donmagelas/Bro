@@ -1459,6 +1459,19 @@ svg {
     gap: 8px;
   }
 }
+.resource-load-history {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid #d7c09d;
+}
+.resource-load-history > summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 650;
+}
+.resource-load-history[open] > summary {
+  margin-bottom: 18px;
+}
 .settings-modal hr {
   border: 0;
   border-top: 1px solid #d9c6a6;
