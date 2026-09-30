@@ -30,7 +30,6 @@ import {
   uncommittedMessages,
   type StreamMessage,
 } from "./conversation";
-import { OutboxPanel } from "./OutboxPanel";
 import { AccountQuota } from "./AccountQuota";
 import { PixelIcon, PixelScene, rooms } from "./PixelScene";
 
@@ -2242,7 +2241,6 @@ function SettingsPanel({
                 </button>
               </>
             )}
-            {tab === "飞书" && <OutboxPanel run={run} />}
             {tab === "Monitor" && (
               <>
                 <h3>入口绑定</h3>
