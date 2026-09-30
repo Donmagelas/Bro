@@ -1413,6 +1413,134 @@ svg {
   background: #f0d2ba;
   border-color: #c28564;
 }
+.feishu-connection {
+  container-type: inline-size;
+}
+.feishu-connection-header {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+}
+.feishu-connection .monitor-connection-name h3 {
+  margin: 0;
+}
+.feishu-connection-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.feishu-connection-actions .monitor-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #73562d;
+}
+.feishu-connection-actions .monitor-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  background: #967538;
+}
+.feishu-connection-actions .monitor-status.off {
+  color: #8b7965;
+}
+.feishu-connection-actions .monitor-status.off::before {
+  background: #a69a88;
+}
+.feishu-connection-actions .monitor-status.error {
+  color: #8e3429;
+}
+.feishu-connection-actions .monitor-status.error::before {
+  background: #a9533e;
+}
+.feishu-connection-actions button {
+  min-height: 34px;
+  padding: 6px 14px;
+  margin: 0;
+}
+.feishu-connection > .notice {
+  margin: 16px 0 0;
+}
+@container (max-width: 420px) {
+  .feishu-connection-header {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+  .feishu-connection-actions {
+    grid-column: 2;
+    justify-content: space-between;
+  }
+}
+.feishu-trusted > .description {
+  margin: 12px 0 16px;
+  color: #84684b;
+}
+.feishu-trusted-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid #d4bc95;
+  background: #f7ecd6;
+}
+.feishu-trusted-list li {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+}
+.feishu-trusted-list li + li {
+  border-top: 1px solid #ddc9a9;
+}
+.feishu-user-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  background: #ecdbb8;
+  color: #89603d;
+}
+.feishu-user-icon svg {
+  width: 16px;
+  height: 16px;
+}
+.feishu-trusted-list code {
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.feishu-remove-user {
+  color: #8e5140;
+  font-size: 12px;
+  padding: 6px 8px;
+}
+.feishu-remove-user:hover {
+  background: #eddbc2;
+}
+.feishu-add-user {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+.feishu-add-user .field {
+  margin: 0;
+}
+.feishu-add-user > button {
+  min-height: 43px;
+  margin: 0;
+}
+.feishu-trusted-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #a24432;
+  font-size: 12px;
+  line-height: 1.6;
+}
 .monitor-destination {
   display: flex;
   flex-wrap: wrap;

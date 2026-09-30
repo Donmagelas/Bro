@@ -18,12 +18,21 @@ export function FeishuPanel({
     appId: state.feishu.appId || "",
     appSecret: "",
     botId: state.feishu.botId || "",
-    trusted: state.settings.trustedFeishuUsers.join("\n"),
   });
+  const [trustedUser, setTrustedUser] = useState("");
+  const [trustedError, setTrustedError] = useState("");
+  const [trustedBusy, setTrustedBusy] = useState(false);
+  const trustedInputId = useId();
+  const trustedErrorId = useId();
   const [setupBusy, setSetupBusy] = useState(false);
   const [replace, setReplace] = useState(false);
   const pairingHelpId = useId();
   const setup = state.feishu.setup || { status: "idle" };
+  const [trustedOpen, setTrustedOpen] = useState(
+    state.feishu.configured &&
+      !state.settings.trustedFeishuUsers.length &&
+      setup.status !== "pairing",
+  );
   const activeSetup = ["starting", "waiting", "connecting"].includes(
     setup.status,
   );
@@ -36,11 +45,9 @@ export function FeishuPanel({
     }));
   }, [state.feishu.appId, state.feishu.botId]);
   useEffect(() => {
-    setDraft((d) => ({
-      ...d,
-      trusted: state.settings.trustedFeishuUsers.join("\n"),
-    }));
-  }, [state.settings.trustedFeishuUsers.join("\n")]);
+    setTrustedUser("");
+    setTrustedError("");
+  }, [state.feishu.appId]);
   const setupAction = async (action: string, body: unknown = {}) => {
     setSetupBusy(true);
     try {
@@ -81,6 +88,36 @@ export function FeishuPanel({
         enabled: !feishuEnabled,
       }),
     );
+  const saveTrustedUsers = async (users: string[], adding = false) => {
+    if (trustedBusy) return;
+    setTrustedBusy(true);
+    try {
+      await run(
+        async () => {
+          await window.bro.request("/settings", "PATCH", {
+            trustedFeishuUsers: users,
+          });
+          if (adding) setTrustedUser("");
+          setTrustedError("");
+        },
+        adding ? "已添加受信任的用户" : "已移除用户",
+      );
+    } finally {
+      setTrustedBusy(false);
+    }
+  };
+  const addTrustedUser = () => {
+    const id = trustedUser.trim();
+    if (!/^ou_[a-zA-Z0-9_-]+$/.test(id)) {
+      setTrustedError("请输入一个有效的飞书 open_id，以 ou_ 开头。");
+      return;
+    }
+    if (state.settings.trustedFeishuUsers.includes(id)) {
+      setTrustedError("这个用户已在名单中，无需重复添加。");
+      return;
+    }
+    void saveTrustedUsers([...state.settings.trustedFeishuUsers, id], true);
+  };
   return (
     <div className="monitor-panel">
       <section
@@ -269,8 +306,11 @@ export function FeishuPanel({
         )}
       </section>
       {state.feishu.configured && (
-        <article className="monitor-connection" aria-label="飞书连接">
-          <div className="monitor-connection-header">
+        <article
+          className="monitor-connection feishu-connection"
+          aria-label="飞书连接"
+        >
+          <div className="feishu-connection-header">
             <div className="monitor-source-icon">
               <PixelIcon kind="mail" />
             </div>
@@ -278,33 +318,33 @@ export function FeishuPanel({
               <h3>飞书</h3>
               <span>机器人私聊与群聊</span>
             </div>
-            <span
-              className={`monitor-status ${!feishuEnabled ? "off" : state.feishu.error ? "error" : ""}`}
-            >
-              {!feishuEnabled
-                ? "已停用"
-                : state.feishu.error
-                  ? "连接异常"
-                  : state.feishu.connected
-                    ? "已连接"
-                    : "连接中"}
-            </span>
+            <div className="feishu-connection-actions">
+              <span
+                className={`monitor-status ${!feishuEnabled ? "off" : state.feishu.error ? "error" : ""}`}
+              >
+                {!feishuEnabled
+                  ? "已停用"
+                  : state.feishu.error
+                    ? "连接异常"
+                    : state.feishu.connected
+                      ? "已连接"
+                      : "连接中"}
+              </span>
+              <button
+                className="secondary"
+                type="button"
+                disabled={activeSetup || setupBusy}
+                onClick={() => void toggleFeishu()}
+              >
+                {feishuEnabled ? "停用" : "启用"}
+              </button>
+            </div>
           </div>
           {feishuEnabled && state.feishu.error && (
             <p role="status" className="notice">
               {state.feishu.error}
             </p>
           )}
-          <div className="monitor-card-actions">
-            <button
-              className="secondary"
-              type="button"
-              disabled={activeSetup || setupBusy}
-              onClick={() => void toggleFeishu()}
-            >
-              {feishuEnabled ? "停用" : "启用"}
-            </button>
-          </div>
         </article>
       )}
 
@@ -349,39 +389,86 @@ export function FeishuPanel({
         </form>
       </details>
       <details
-        className="monitor-section"
-        open={
-          state.feishu.configured &&
-          !state.settings.trustedFeishuUsers.length &&
-          setup.status !== "pairing"
-        }
+        className="monitor-section feishu-trusted"
+        open={trustedOpen}
+        onToggle={(event) => setTrustedOpen(event.currentTarget.open)}
       >
         <summary>
           受信任的人 · {state.settings.trustedFeishuUsers.length} 人
         </summary>
-        <p className="description">
-          名单内的人可以使用 Bro。填写此应用下的用户 open_id，每行一个。
-        </p>
+        <p className="description">名单内的人可以通过飞书使用 Bro。</p>
+        {state.settings.trustedFeishuUsers.length ? (
+          <ul className="feishu-trusted-list" aria-label="受信任的飞书用户">
+            {state.settings.trustedFeishuUsers.map((id) => (
+              <li key={id}>
+                <span className="feishu-user-icon" aria-hidden="true">
+                  <PixelIcon kind="person" />
+                </span>
+                <code>{id}</code>
+                <button
+                  type="button"
+                  className="feishu-remove-user"
+                  aria-label={`移除用户 ${id}`}
+                  disabled={trustedBusy || activeSetup || setupBusy}
+                  onClick={() =>
+                    void saveTrustedUsers(
+                      state.settings.trustedFeishuUsers.filter(
+                        (user) => user !== id,
+                      ),
+                    )
+                  }
+                >
+                  移除
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="empty-note">
+            暂无受信任的用户，添加后即可通过飞书使用 Bro。
+          </p>
+        )}
         <form
+          className="feishu-add-user"
+          aria-label="添加受信任的用户"
+          noValidate
           onSubmit={(e) => {
             e.preventDefault();
-            void run(() =>
-              window.bro.request("/settings", "PATCH", {
-                trustedFeishuUsers: draft.trusted.split(/\s+/).filter(Boolean),
-              }),
-            );
+            addTrustedUser();
           }}
         >
-          <label className="field">
-            受信任的飞书用户
-            <textarea
-              className="settings-textarea"
-              value={draft.trusted}
-              placeholder="ou_…"
-              onChange={(e) => update("trusted", e.target.value)}
+          <label className="field" htmlFor={trustedInputId}>
+            用户 open_id
+            <input
+              id={trustedInputId}
+              value={trustedUser}
+              placeholder="输入此应用下的用户 ID，ou_ 开头"
+              autoComplete="off"
+              spellCheck={false}
+              aria-invalid={!!trustedError}
+              aria-describedby={trustedError ? trustedErrorId : undefined}
+              disabled={trustedBusy || activeSetup || setupBusy}
+              onChange={(e) => {
+                setTrustedUser(e.target.value);
+                setTrustedError("");
+              }}
             />
           </label>
-          <button className="secondary">保存名单</button>
+          <button
+            className="secondary"
+            disabled={trustedBusy || activeSetup || setupBusy}
+          >
+            添加用户
+          </button>
+          {trustedError && (
+            <p
+              id={trustedErrorId}
+              className="feishu-trusted-error"
+              role="alert"
+            >
+              {trustedError}
+            </p>
+          )}
         </form>
       </details>
       <section className="monitor-section">

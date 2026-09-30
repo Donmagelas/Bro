@@ -56,6 +56,7 @@ export const rooms: Record<
 
 export function PixelIcon({ kind = "chip" }: { kind?: string }) {
   const shapes: Record<string, string> = {
+    person: "M9 0h6v3h3v6h-3v3H9V9H6V3h3zM6 15h12v3h3v6H3v-6h3z",
     book: "M0 3h9v3h6V3h9v18h-9v3H9v-3H0zm3 3v12h6V6zm12 0v12h6V6z",
     cactus: "M9 0h6v12h3V6h6v12h-9v6H9v-6H0V9h6v3h3z",
     chip: "M6 3h12v3h3v12h-3v3H6v-3H3V6h3zm3 6v6h6V9zM0 8h3v3H0zm0 6h3v3H0zm21-6h3v3h-3zm0 6h3v3h-3zM8 0h3v3H8zm6 0h3v3h-3zM8 21h3v3H8zm6 0h3v3h-3z",
