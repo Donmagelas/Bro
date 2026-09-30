@@ -28,4 +28,4 @@
 
 ## 不需要明天重新确认的事
 
-名称 bro、单一 Agent 多会话、Electron + Bun 宿主 + OMP 进程、macOS/Windows、飞书先行、可信名单同权、所有外部消息排队、异步交办、yolo、手动继续桌面操作、可插拔实验、Mnemopi 开关及全部减项均沿用已确认方案。
+名称 bro、单一 Agent 多会话、Electron + Bun 宿主 + OMP 进程、macOS/Windows、飞书先行、可信名单同权、所有外部消息排队、异步交办、yolo、手动继续桌面操作、可插拔实验及全部减项均沿用已确认方案。Mnemopi 默认关闭，保留手动开关并持久保存用户选择。
