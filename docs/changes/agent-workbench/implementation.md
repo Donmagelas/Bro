@@ -17,7 +17,7 @@
 | 步骤 | 当前实现与验证 | 未完成部分 |
 | --- | --- | --- |
 | 01 | 固定发布依赖；macOS Bun/OMP 创建、工具写文件、关闭、恢复历史；包内运行通过 | Windows 实机；全部原生能力探针 |
-| 02 | Electron/React GUI，API 配置、流式回复、实际写文件、ChatGPT OAuth 接口 | 真实 ChatGPT/API 账号、模型图片、额度与费用；Windows |
+| 02 | Electron/React GUI，API 配置、流式回复、实际写文件；用户实测 ChatGPT 登录及真实对话通过 | 账号刷新、自定义 API、模型图片、额度与费用、真实模型完整开发任务；Windows |
 | 03 | SQLite 队列、单会话独立进程、跨会话进程；实测 queue/steer/stop、关窗执行、重开历史 | 空闲回收、完整崩溃矩阵、长期运行与升级 |
 | 04 | 原生 OMP 写文件、读取、JS、工具结果；文本批注从 GUI 进入实际请求；基础 diff | 完整项目修复案例、Python/LSP/DAP、更多产物 |
 | 05 | GUI 资源设置；原生 PluginManager 本地安装、Skill 扫描和 MCP 连接；真实调用及禁用通过 | Git 更新、复杂扩展配置、动态 MCP 与完整卸载验收 |
@@ -42,7 +42,7 @@
 
 2026-09-30 向量检索暂缓配置：`bun run check` 和 `bun run probe:memory` 通过。记忆探针不再自行设置 `noEmbeddings`，直接验证 bro 的文本检索基线；自动保存、新会话检索/注入、关闭后不注入均通过。证据目录为同一临时父目录下的 `bro-memory-probe-3CDLGW`；抽取模型仍未验收。
 
-2026-09-30 ChatGPT 登录修复：用户浏览器授权后的 token exchange 复现地区 403；不含凭据的无效令牌请求在默认网络下返回该 403，使用已有系统代理后返回预期的 401 `token_expired`。后台现于启动时继承 macOS 手动 HTTP/HTTPS 代理，保留显式环境配置和本机直连。类型检查、25 项测试（含实际 Bun 代理与回环直连）、本机重新打包和签名检查通过；更新后的应用已重启并在后台日志确认代理初始化，等待用户重新授权，尚不宣称真实账号登录通过。Windows 系统代理自动继承与 PAC/WPAD 待后续处理。
+2026-09-30 ChatGPT 登录修复：用户浏览器授权后的 token exchange 复现地区 403；不含凭据的无效令牌请求在默认网络下返回该 403，使用已有系统代理后返回预期的 401 `token_expired`。后台现于启动时继承 macOS 手动 HTTP/HTTPS 代理，保留显式环境配置和本机直连。类型检查、25 项测试（含实际 Bun 代理与回环直连）、本机重新打包和签名检查通过；更新后的应用已重启并在后台日志确认代理初始化。用户随后明确反馈“我已经成功登陆并对话通了”，因此 `461bd8b` 对应本机应用的 ChatGPT 登录与真实对话记为用户实测通过；账号刷新、图片、工具调用及完整开发任务另行验收。Windows 系统代理自动继承与 PAC/WPAD 待后续处理。
 
 双平台 CI：[运行 36578121307](https://github.com/Donmagelas/bro/actions/runs/36578121307) 在 `72b3d4e` 上成功完成 macOS 15、Windows 2025 的类型检查、21 项测试、OMP/runtime/controls/memory 四个真实运行探针及打包，两端 ZIP 均已上传。后续 `4130725` 的本机重新打包和 GUI 验收通过；[运行 36579225416](https://github.com/Donmagelas/bro/actions/runs/36579225416) 也已成功。Windows CI 不替代真实交互桌面、系统权限或账号验收。
 

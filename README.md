@@ -2,7 +2,7 @@
 
 面向 macOS 和 Windows 的个人 Agent 工作台：一个 bro，多个会话。桌面布局参考 Codex；飞书、Peer 和本机事件通过独立后台进入会话队列。
 
-目前是 **0.1 开发版**。macOS Apple Silicon 的应用包、GUI 配置、真实 OMP 工具执行、跨会话交办和关窗后的后台运行已验证。真实模型账号、飞书收发、原生桌面权限、Mnemopi 和 Windows 尚有验收缺口，详见 [实施进度](docs/changes/agent-workbench/implementation.md) 和 [待处理事项](docs/changes/agent-workbench/open-issues.md)。
+目前是 **0.1 开发版**。macOS Apple Silicon 的应用包、GUI 配置、真实 OMP 工具执行、跨会话交办和关窗后的后台运行已验证；用户已实测 ChatGPT 登录及真实对话通过。账号刷新、自定义 API、真实模型完整开发任务、飞书收发、原生桌面权限、Mnemopi 和 Windows 尚有验收缺口，详见 [实施进度](docs/changes/agent-workbench/implementation.md) 和 [待处理事项](docs/changes/agent-workbench/open-issues.md)。
 
 ## 运行
 
