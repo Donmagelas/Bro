@@ -95,6 +95,14 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     close: <path d="m6 6 12 12M6 18 18 6" />,
     chevron: <path d="m9 5 7 7-7 7" />,
     pin: <path d="m8 3 8 0-1 6 4 5H5l4-5zm4 11v7" />,
+    branch: (
+      <>
+        <circle cx="6" cy="5" r="2" />
+        <circle cx="6" cy="19" r="2" />
+        <circle cx="18" cy="5" r="2" />
+        <path d="M6 7v10m0-4h5a7 7 0 0 0 7-6" />
+      </>
+    ),
     activity: <path d="M2 12h5l3-8 4 16 3-8h5" />,
     more: (
       <>
@@ -200,7 +208,8 @@ function App() {
   const followBottom = useRef(true);
   const [showJump, setShowJump] = useState(false);
   const statsSequence = useRef(0);
-  const [diff, setDiff] = useState<any>(null);
+  const forkLock = useRef(false);
+  const [forkingMessage, setForkingMessage] = useState<string | null>(null);
   const [usage, setUsage] = useState<any>(null);
   const [quoteSelection, setQuoteSelection] = useState<{
     messageId: string;
@@ -352,14 +361,7 @@ function App() {
   );
   useEffect(() => {
     setQuoteSelection(null);
-    if (
-      !selected ||
-      session?.archived ||
-      question ||
-      settings ||
-      diff ||
-      confirmation
-    )
+    if (!selected || session?.archived || question || settings || confirmation)
       return;
     const updateSelection = () => {
       const selection = window.getSelection();
@@ -419,14 +421,7 @@ function App() {
       document.removeEventListener("scroll", updateSelection, true);
       window.removeEventListener("resize", updateSelection);
     };
-  }, [
-    selected,
-    session?.archived,
-    !!question,
-    settings,
-    !!diff,
-    !!confirmation,
-  ]);
+  }, [selected, session?.archived, !!question, settings, !!confirmation]);
   useEffect(() => {
     const seq = ++statsSequence.current;
     if (!selected) return;
@@ -475,6 +470,46 @@ function App() {
     void refresh();
     return s.id as string;
   };
+  async function forkFromMessage(messageId: string) {
+    if (!session || forkLock.current) return;
+    forkLock.current = true;
+    setForkingMessage(messageId);
+    const version = navigationVersion.current;
+    try {
+      await run(async () => {
+        const fork: Session = await api(
+          `/sessions/${session.id}/fork`,
+          "POST",
+          {
+            messageId,
+          },
+        );
+        setState(
+          (current) =>
+            current && {
+              ...current,
+              sessions: [
+                fork,
+                ...current.sessions.filter((s) => s.id !== fork.id),
+              ],
+            },
+        );
+        if (version === navigationVersion.current) {
+          navigationVersion.current++;
+          selectedRef.current = fork.id;
+          setSelected(fork.id);
+          setActiveProjectId(fork.projectId);
+          setShowArchived(false);
+          setSearch("");
+          setMode("queue");
+          composerRef.current?.focus();
+        }
+      });
+    } finally {
+      forkLock.current = false;
+      setForkingMessage(null);
+    }
+  }
   async function send() {
     if (
       (!draft.trim() && !annotations.length) ||
@@ -553,7 +588,6 @@ function App() {
         window.getSelection()?.removeAllRanges();
         setQuoteSelection(null);
         setQuestion(null);
-        setDiff(null);
         setSettings(false);
         setMenu(false);
         if (!confirming) setConfirmation(null);
@@ -769,45 +803,11 @@ function App() {
             )}
             {menu && session && (
               <div className="popover">
-                <button
-                  onClick={() =>
-                    void run(() =>
-                      api(`/sessions/${selected}/compact`, "POST", {}),
-                    )
-                  }
-                >
-                  压缩上下文
-                </button>
-                <button
-                  onClick={() =>
-                    void run(async () => {
-                      setDiff(await api(`/sessions/${selected}/diff`));
-                      setMenu(false);
-                    })
-                  }
-                >
-                  查看改动
-                </button>
                 <button onClick={() => sessionAction(session, "rename")}>
                   重命名
                 </button>
                 <button onClick={() => sessionAction(session, "pin")}>
                   {session.pinned ? "取消置顶" : "置顶"}
-                </button>
-                <button
-                  onClick={() =>
-                    void run(async () => {
-                      const s = await api(
-                        `/sessions/${selected}/fork`,
-                        "POST",
-                        {},
-                      );
-                      setSelected(s.id);
-                      setShowArchived(false);
-                    })
-                  }
-                >
-                  创建分支
                 </button>
                 <button onClick={() => sessionAction(session, "archive")}>
                   {session.archived ? "恢复会话" : "归档会话"}
@@ -967,6 +967,20 @@ function App() {
                           </Markdown>
                         </div>
                       )}
+                      {m.role === "assistant" &&
+                        !m.transient &&
+                        !m.streaming && (
+                          <div className="message-actions">
+                            <button
+                              title="从这条回复创建分支"
+                              disabled={forkingMessage !== null}
+                              onClick={() => void forkFromMessage(m.id)}
+                            >
+                              <Icon name="branch" size={15} />
+                              {forkingMessage === m.id ? "创建中…" : "分支"}
+                            </button>
+                          </div>
+                        )}
                       {m.role === "user" &&
                         m.delivery &&
                         [
@@ -1292,32 +1306,6 @@ function App() {
           run={run}
           selected={selected}
         />
-      )}
-      {diff && (
-        <div className="modal-backdrop">
-          <section className="diff-modal">
-            <button
-              className="modal-close icon-button"
-              onClick={() => setDiff(null)}
-            >
-              关闭
-            </button>
-            <h3>工作目录改动</h3>
-            <pre>{diff.status || "工作目录干净"}</pre>
-            {diff.unstaged && (
-              <>
-                <h4>未暂存</h4>
-                <pre>{diff.unstaged}</pre>
-              </>
-            )}
-            {diff.staged && (
-              <>
-                <h4>已暂存</h4>
-                <pre>{diff.staged}</pre>
-              </>
-            )}
-          </section>
-        </div>
       )}
       {confirmation && (
         <div className="modal-backdrop">

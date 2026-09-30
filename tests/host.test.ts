@@ -1,5 +1,12 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHost } from "../apps/host/server";
@@ -340,3 +347,140 @@ test("project lifecycle endpoints keep session history and the local directory i
     (await req(host, `/projects/${project.id}`, undefined, "DELETE")).status,
   ).toBe(404);
 });
+
+test("reply forks keep only the selected history, persist independently and reject invalid boundaries", async () => {
+  const host = setup();
+  const { SessionManager } = await import("@oh-my-pi/pi-coding-agent");
+  const source = host.store.createSession({
+    title: "分支来源",
+    model: "fixture",
+    thinking: "high",
+  });
+  const manager = SessionManager.create(
+    source.cwd,
+    join(host.store.root, "sessions", source.id),
+  );
+  const reply = (text: string, calls = false): any => ({
+    role: "assistant",
+    content: [
+      { type: "text", text },
+      ...(calls
+        ? [{ type: "toolCall", id: "call-1", name: "glob", arguments: {} }]
+        : []),
+    ],
+    api: "openai-completions",
+    provider: "openai",
+    model: "fixture",
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: calls ? "toolUse" : "stop",
+    timestamp: Date.now(),
+  });
+  manager.appendCustomEntry("bro_input", {
+    id: "original-input",
+    text: "第一问",
+    annotations: [{ messageId: "quote", quote: "原文", comment: "批注" }],
+  });
+  const userId = manager.appendMessage({
+    role: "user",
+    content: "第一问",
+    timestamp: Date.now(),
+  });
+  const firstId = manager.appendMessage(reply("先检查文件", true));
+  manager.appendMessage({
+    role: "toolResult",
+    toolCallId: "call-1",
+    toolName: "glob",
+    content: [{ type: "text", text: "test.ts" }],
+    isError: false,
+    timestamp: Date.now(),
+  });
+  const secondId = manager.appendMessage(reply("第一问完成"));
+  manager.appendCustomEntry("bro_input", {
+    id: "later-input",
+    text: "后续问题",
+  });
+  manager.appendMessage({
+    role: "user",
+    content: "后续问题",
+    timestamp: Date.now(),
+  });
+  const lastId = manager.appendMessage(reply("后续答案"));
+  await manager.flush();
+  const originalFile = manager.getSessionFile()!;
+  await manager.close();
+  host.store.updateSession(source.id, { runtimeFile: originalFile });
+  const originalBytes = readFileSync(originalFile, "utf8");
+  const artifacts = originalFile.slice(0, -6);
+  mkdirSync(artifacts, { recursive: true });
+  writeFileSync(join(artifacts, "1.glob.log"), "artifact content");
+  let firstFork: any;
+  for (const [messageId, count] of [
+    [firstId, 2],
+    [secondId, 4],
+    [lastId, 6],
+  ] as const) {
+    const response = await req(host, `/sessions/${source.id}/fork`, {
+      messageId,
+    });
+    expect(response.status).toBe(200);
+    const fork = response.data;
+    firstFork ??= fork;
+    expect(fork).toMatchObject({
+      cwd: source.cwd,
+      projectId: source.projectId,
+      model: "fixture",
+      thinking: "high",
+      status: "idle",
+    });
+    expect(host.store.inputs(fork.id)).toEqual([]);
+    expect(host.store.memoryScope(fork.id)).toBe(
+      host.store.memoryScope(source.id),
+    );
+    const history = (await req(host, `/sessions/${fork.id}/history`)).data
+      .messages;
+    expect(history).toHaveLength(count);
+    expect(history.at(-1).id).toBe(messageId);
+    expect(history[0].bro.inputs[0].annotations[0].comment).toBe("批注");
+    expect(
+      readFileSync(join(fork.runtimeFile.slice(0, -6), "1.glob.log"), "utf8"),
+    ).toBe("artifact content");
+    if (messageId === firstId) {
+      expect(history.at(-1).content).toEqual([
+        { type: "text", text: "先检查文件" },
+      ]);
+      expect(history.at(-1).stopReason).toBe("stop");
+      expect(readFileSync(fork.runtimeFile, "utf8")).not.toContain("后续答案");
+    }
+  }
+  const reopened = await SessionManager.open(firstFork.runtimeFile);
+  reopened.appendMessage({
+    role: "user",
+    content: "分支独立续聊",
+    timestamp: Date.now(),
+  });
+  reopened.appendMessage(reply("分支答案"));
+  await reopened.close();
+  const history = (await req(host, `/sessions/${firstFork.id}/history`)).data
+    .messages;
+  expect(history).toHaveLength(4);
+  expect(history.at(-1).content[0].text).toBe("分支答案");
+  expect(readFileSync(originalFile, "utf8")).toBe(originalBytes);
+  const count = host.store.sessions().length;
+  for (const boundary of [
+    {},
+    { messageId: userId },
+    { messageId: "missing-reply" },
+  ]) {
+    expect(
+      (await req(host, `/sessions/${source.id}/fork`, boundary)).status,
+    ).toBe(400);
+    expect(host.store.sessions()).toHaveLength(count);
+  }
+}, 30000);

@@ -20,6 +20,9 @@
   --muted: #957d63;
   --paper: #f4e9d7;
   --line: #dbccb6;
+  --text-panel: #eddfc5;
+  --text-panel-border: #d3b98e;
+  --text-panel-accent: #af8653;
   --lime: #e7b576;
   --pixel: Silkscreen, "Courier New", monospace;
   color-scheme: light;
@@ -571,6 +574,17 @@ svg {
   border: 1px solid #dac8a74d;
   border-radius: 12px;
 }
+.message-actions {
+  display: flex;
+  margin-top: 8px;
+}
+.message-actions button {
+  color: var(--muted);
+  font-size: 11px;
+  min-height: 28px;
+  padding: 3px 6px;
+  border-radius: 4px;
+}
 .message.assistant + .message.assistant {
   margin-top: -14px;
 }
@@ -603,9 +617,9 @@ svg {
   white-space: pre;
   overflow-wrap: normal;
   word-break: normal;
-  background: #e8e9de;
-  border: 1px solid #cfd5c1;
-  border-left: 3px solid #8ea17a;
+  background: var(--text-panel);
+  border: 1px solid var(--text-panel-border);
+  border-left: 3px solid var(--text-panel-accent);
   padding: 16px;
   font-size: 12px;
   overflow: auto;
@@ -613,7 +627,7 @@ svg {
 }
 .markdown code {
   font-size: 0.9em;
-  background: #e2e8d4;
+  background: #e8d7b6;
   padding: 2px 4px;
 }
 .markdown pre code {
@@ -661,18 +675,18 @@ svg {
 }
 .markdown td,
 .markdown th {
-  border: 1px solid #cdd6bf;
+  border: 1px solid var(--text-panel-border);
   padding: 9px;
   text-align: left;
 }
 .markdown th {
-  background: #e6ebd9;
+  background: var(--text-panel);
 }
 .markdown blockquote {
   margin-left: 0;
-  border-left: 3px solid #aabc90;
+  border-left: 3px solid var(--text-panel-accent);
   padding-left: 14px;
-  color: #748169;
+  color: #8b704f;
 }
 .annotation-button {
   position: fixed;
@@ -682,13 +696,13 @@ svg {
   font-size: 12px;
   color: var(--ink);
   padding: 4px 12px;
-  background: #e7edda;
-  border: 1px solid #aabc90;
+  background: #f0dfbd;
+  border: 1px solid var(--text-panel-border);
   box-shadow: 3px 3px 0 #42312833;
 }
 .annotation-button:hover,
 .annotation-button:focus-visible {
-  background: #d6e2bd;
+  background: #e6cda2;
 }
 .tool-result {
   font-size: 12px;
@@ -710,6 +724,10 @@ svg {
   display: flex;
   align-items: center;
   gap: 8px;
+  color: #8b704f;
+  background: var(--text-panel);
+  border: 1px solid var(--text-panel-border);
+  padding: 9px 12px;
 }
 .tool-result pre {
   max-height: 300px;
@@ -1252,11 +1270,11 @@ svg {
 }
 .empty-note {
   font-size: 12px;
-  color: #99a186;
+  color: #957d63;
   line-height: 1.8;
   padding: 14px;
-  border: 1px dashed #c8d0b7;
-  background: #f0f1e4;
+  border: 1px dashed var(--text-panel-border);
+  background: #f1e5ce;
 }
 .settings-modal hr {
   border: 0;
@@ -1316,8 +1334,8 @@ svg {
   width: min(460px, 100%);
   background: #f7f2e8;
   padding: 26px;
-  border: 3px solid #344b30;
-  box-shadow: 6px 6px #17251b50;
+  border: 3px solid #8d6c46;
+  box-shadow: 6px 6px #49382b30;
 }
 .question-modal h3 {
   font-size: 15px;
@@ -1325,7 +1343,7 @@ svg {
   margin: 0 0 17px;
 }
 .question-modal textarea {
-  border: 1px solid #b4c3a0;
+  border: 1px solid var(--text-panel-border);
   background: #fffdf4;
   width: 100%;
   min-height: 110px;
@@ -1345,27 +1363,7 @@ svg {
 .chat-image {
   max-width: 100%;
   max-height: 500px;
-  border: 1px solid #c5ceaf;
-}
-.diff-modal {
-  background: #f8f4e9;
-  width: min(950px, 95vw);
-  height: 85vh;
-  padding: 30px;
-  position: relative;
-  overflow: auto;
-  border: 3px solid #344b30;
-  box-shadow: 6px 6px #17251b50;
-}
-.diff-modal pre {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font:
-    12px/1.7 ui-monospace,
-    monospace;
-  background: #e6ead9;
-  padding: 15px;
-  border-left: 3px solid #a7b890;
+  border: 1px solid var(--text-panel-border);
 }
 @keyframes blink {
   50% {

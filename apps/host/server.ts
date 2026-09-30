@@ -13,6 +13,7 @@ import {
   statSync,
   readFileSync,
   readdirSync,
+  rmSync,
 } from "node:fs";
 import { Store } from "./store";
 import { Runtimes } from "./runtime";
@@ -573,25 +574,63 @@ export function createHost(
             return json(d);
           }
           if (action === "fork" && method === "POST") {
+            const messageId = str(
+              (await body(request)).messageId,
+              "回复 ID",
+              200,
+            );
             if (!session.runtimeFile) throw new Error("会话还没有可分支的历史");
             const packageName = "@oh-my-pi/pi-coding-agent";
-            const { SessionManager } = await import(packageName);
+            const { SessionManager, copySessionArtifacts } = await import(
+              packageName
+            );
             const fork = store.createSession({
               ...session,
               title: `${session.title} · 分支`,
             });
-            store.setConfig(`memoryScope:${fork.id}`, store.memoryScope(id));
             const dir = join(root, "sessions", fork.id);
-            mkdirSync(dir, { recursive: true });
-            const manager = await SessionManager.forkFrom(
-              session.runtimeFile,
-              session.cwd,
-              dir,
-            );
-            store.updateSession(fork.id, {
-              runtimeFile: manager.getSessionFile(),
-            });
-            await manager.close();
+            try {
+              const manager = await SessionManager.open(
+                session.runtimeFile,
+                dir,
+                undefined,
+                {
+                  throwIfMissing: true,
+                  suppressBreadcrumb: true,
+                },
+              );
+              try {
+                const entry = manager
+                  .getBranch()
+                  .find((e: any) => e.id === messageId);
+                if (
+                  entry?.type !== "message" ||
+                  entry.message.role !== "assistant"
+                )
+                  throw new Error("只能从当前会话已保存的回复创建分支");
+                // A reply can include planned tool calls. Their results occur
+                // after the selected boundary, so carry only the reply content.
+                if (Array.isArray(entry.message.content)) {
+                  entry.message.content = entry.message.content.filter(
+                    (c: any) => c.type !== "toolCall",
+                  );
+                  if (entry.message.stopReason === "toolUse")
+                    entry.message.stopReason = "stop";
+                }
+                mkdirSync(dir, { recursive: true });
+                const runtimeFile = manager.createBranchedSession(messageId);
+                if (!runtimeFile) throw new Error("分支历史保存失败");
+                await copySessionArtifacts(session.runtimeFile, runtimeFile);
+                store.updateSession(fork.id, { runtimeFile });
+              } finally {
+                await manager.close();
+              }
+              store.setConfig(`memoryScope:${fork.id}`, store.memoryScope(id));
+            } catch (error) {
+              store.deleteSession(fork.id);
+              rmSync(dir, { recursive: true, force: true });
+              throw error;
+            }
             changed();
             return json(store.session(fork.id));
           }
