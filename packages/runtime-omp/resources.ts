@@ -1,6 +1,41 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { homedir } from "node:os";
 import type { Resource, Session } from "../contracts";
+
+// OMP's directory convenience loader only scans children. Explicit bro
+// resources also allow selecting a single directory containing SKILL.md.
+export async function loadBroSkills(dir: string, source: string) {
+  const module = resolve(
+    import.meta.dir,
+    "../../node_modules/@oh-my-pi/pi-coding-agent/src/discovery/helpers.ts",
+  );
+  const { scanSkillsFromDir } = await import(module);
+  const result = await scanSkillsFromDir(
+    { cwd: process.cwd(), home: homedir(), repoRoot: null },
+    {
+      dir,
+      providerId: "bro",
+      level: source === "bro:project" ? "project" : "user",
+      requireDescription: true,
+      includeSelf: true,
+    },
+  );
+  return {
+    skills: result.items.map((skill: any) => ({
+      name: skill.name,
+      description: skill.frontmatter.description,
+      filePath: skill.path,
+      baseDir: dirname(skill.path),
+      source,
+      hide:
+        skill.frontmatter.hide === true ||
+        skill.frontmatter.disableModelInvocation === true,
+      _source: skill._source,
+    })),
+    warnings: (result.warnings || []).map((message: string) => ({ message })),
+  };
+}
 
 export async function loadResources(
   root: string,
@@ -10,9 +45,6 @@ export async function loadResources(
   const base = resolve(
     import.meta.dir,
     "../../node_modules/@oh-my-pi/pi-coding-agent/src",
-  );
-  const { loadSkillsFromDir } = await import(
-    join(base, "extensibility/skills.ts")
   );
   const {
     resolvePluginExtensionPaths,
@@ -32,10 +64,10 @@ export async function loadResources(
   ];
   for (const dir of directories) {
     if (!existsSync(dir)) continue;
-    const found = await loadSkillsFromDir({
+    const found = await loadBroSkills(
       dir,
-      source: dir.startsWith(session.cwd) ? "bro:project" : "bro:user",
-    });
+      dir.startsWith(session.cwd) ? "bro:project" : "bro:user",
+    );
     for (const s of found.skills) skills.set(s.name, s);
     warnings.push(...found.warnings.map((w: any) => w.message));
   }

@@ -15,6 +15,7 @@ import { ResourcePanel } from "./ResourcePanel";
 import { ExperimentPanel } from "./ExperimentPanel";
 import { useDrafts } from "./useDrafts";
 import { OutboxPanel } from "./OutboxPanel";
+import { PixelIcon, PixelScene, rooms } from "./PixelScene";
 
 declare global {
   interface Window {
@@ -91,6 +92,12 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     </svg>
   );
 }
+function errorText(error: unknown): string {
+  return String(error)
+    .replace(/^Error: /, "")
+    .replace(/^Error invoking remote method '[^']+': /, "")
+    .replace(/^(?:Error: )+/, "");
+}
 function textOf(message: ChatMessage): string {
   if (
     message.role === "user" &&
@@ -116,6 +123,8 @@ function App() {
     setAttachments,
     annotations,
     setAnnotations,
+    clearSubmitted,
+    restoreDraft,
   } = useDrafts(selected);
   const [search, setSearch] = useState(""),
     [settings, setSettings] = useState(false),
@@ -127,6 +136,15 @@ function App() {
     [tool, setTool] = useState(""),
     [menu, setMenu] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [outgoing, setOutgoing] = useState<{
+    id: string;
+    sessionId: string | null;
+    text: string;
+  } | null>(null);
+  const sendLock = useRef(false);
+  const followBottom = useRef(true);
+  const statsSequence = useRef(0);
   const [diff, setDiff] = useState<any>(null);
   const [usage, setUsage] = useState<any>(null);
   const [question, setQuestion] = useState<{
@@ -151,17 +169,17 @@ function App() {
   const load = useCallback(async (id: string) => {
     try {
       const seq = ++loadSequence.current;
-      const [data, stats] = await Promise.all([
-        api(`/sessions/${id}/history`),
-        api(`/sessions/${id}/stats`),
-      ]);
+      const data = await api(`/sessions/${id}/history`);
       if (selectedRef.current === id && seq === loadSequence.current) {
-        setUsage(stats);
+        setLoadingHistory(false);
         setMessages(data.messages);
         setInputs(data.inputs);
       }
     } catch (e) {
-      setError(String(e));
+      if (selectedRef.current === id) {
+        setLoadingHistory(false);
+        setError(String(e));
+      }
     }
   }, []);
   useEffect(() => {
@@ -191,6 +209,7 @@ function App() {
         } else if (event.type === "history") {
           loadSequence.current++;
           setMessages(event.data);
+          setLoadingHistory(false);
           setLive("");
           setTool("");
         }
@@ -205,55 +224,109 @@ function App() {
     setLive("");
     setTool("");
     setMenu(false);
+    setLoadingHistory(!!selected);
+    followBottom.current = true;
     if (selected) void load(selected);
   }, [selected, load]);
   useEffect(() => {
-    bottom.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, live, tool]);
+    if (followBottom.current)
+      bottom.current?.scrollIntoView({ behavior: "instant" });
+  }, [messages.length, inputs.length, outgoing, live, tool]);
   const session = [
     ...(state?.sessions || []),
     ...(state?.archivedSessions || []),
   ].find((s) => s.id === selected);
+  useEffect(() => {
+    const seq = ++statsSequence.current;
+    if (!selected) return;
+    void api(`/sessions/${selected}/stats`)
+      .then((value) => {
+        if (seq === statsSequence.current && selectedRef.current === selected)
+          setUsage(value);
+      })
+      .catch(() => {});
+  }, [selected, session?.status]);
   const run = async (fn: () => Promise<unknown>) => {
     try {
       setError("");
       await fn();
       await refresh();
     } catch (e) {
-      setError(String(e).replace(/^Error: /, ""));
+      setError(errorText(e));
     }
   };
   const newSession = async (projectId?: string) => {
     const s = await api("/sessions", "POST", { projectId });
+    selectedRef.current = s.id;
     setSelected(s.id);
+    setState(
+      (current) =>
+        current && {
+          ...current,
+          sessions: [s, ...current.sessions.filter((item) => item.id !== s.id)],
+        },
+    );
     setShowArchived(false);
-    await refresh();
+    setSearch("");
+    void refresh();
     return s.id as string;
   };
   async function send() {
-    if (!draft.trim() || busy || session?.archived) return;
+    if (!draft.trim() || sendLock.current || session?.archived) return;
+    if (!(session?.connectionId || state?.settings.defaultConnectionId)) {
+      setSettingsTab("模型");
+      setSettings(true);
+      setError("请先连接并选择一个模型。");
+      return;
+    }
+    sendLock.current = true;
     setBusy(true);
+    setError("");
+    followBottom.current = true;
+    const snapshot = { text: draft, attachments, annotations };
+    const inputId = crypto.randomUUID();
+    let id = selected;
+    setOutgoing({ id: inputId, sessionId: id, text: snapshot.text });
     try {
-      let id = selected;
       if (!id) id = await newSession();
-      await api(`/sessions/${id}/messages`, "POST", {
-        id: crypto.randomUUID(),
-        text: draft,
+      setOutgoing({ id: inputId, sessionId: id, text: snapshot.text });
+      const input = await api(`/sessions/${id}/messages`, "POST", {
+        id: inputId,
+        ...snapshot,
         mode,
-        attachments,
-        annotations,
       });
-      setDraft("");
-      setAttachments([]);
-      setAnnotations([]);
-      await load(id);
-      await refresh();
+      if (selectedRef.current === id && input.id)
+        setInputs((old) => [...old.filter((i) => i.id !== input.id), input]);
+      clearSubmitted(snapshot);
+      setOutgoing(null);
+      void load(id);
+      void refresh();
     } catch (e) {
-      setError(String(e));
+      setOutgoing(null);
+      restoreDraft(id, snapshot);
+      setError(errorText(e));
     } finally {
+      sendLock.current = false;
       setBusy(false);
     }
   }
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.isComposing) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
+        event.preventDefault();
+        void run(() => newSession());
+      }
+      if (event.key === "Escape") {
+        setQuestion(null);
+        setDiff(null);
+        setSettings(false);
+        setMenu(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
   const patch = (values: unknown) =>
     run(() => api(`/sessions/${selected}`, "PATCH", values));
   function annotate(message: ChatMessage) {
@@ -279,8 +352,12 @@ function App() {
     <div className="app">
       <aside className="sidebar">
         <div className="brand">
-          <span className="brand-mark">b</span>
-          <strong>bro</strong>
+          <span className="brand-mark">
+            <PixelIcon kind="cactus" />
+          </span>
+          <strong>
+            bro<span className="brand-sub">YOUR TRUSTY SIDEKICK</span>
+          </strong>
           <span className="local-label">本机</span>
         </div>
         <button
@@ -288,7 +365,7 @@ function App() {
           onClick={() => void run(() => newSession())}
         >
           <Icon name="plus" />
-          新会话<span className="keyhint">⌘ N</span>
+          新会话<span className="keyhint">⌘ / Ctrl N</span>
         </button>
         <label className="search">
           <Icon name="search" size={16} />
@@ -381,7 +458,7 @@ function App() {
             {session && (
               <>
                 <span className={`status-chip ${session.status}`}>
-                  {labels[session.status]}
+                  {session.archived ? "已归档" : labels[session.status]}
                 </span>
                 <button
                   className="icon-button"
@@ -437,6 +514,7 @@ function App() {
                         {},
                       );
                       setSelected(s.id);
+                      setShowArchived(false);
                     })
                   }
                 >
@@ -448,7 +526,9 @@ function App() {
                       await api(`/sessions/${selected}`, "PATCH", {
                         archived: !session.archived,
                       });
-                      setSelected(null);
+                      setMenu(false);
+                      if (session.archived) setShowArchived(false);
+                      else setSelected(null);
                     })
                   }
                 >
@@ -478,40 +558,63 @@ function App() {
             </button>
           </div>
         )}
-        <div className="conversation">
-          {!messages.length && !inputs.length && !live && (
-            <section className="welcome">
-              <div className="welcome-mark">
-                b<span>↗</span>
-              </div>
-              <h1>一起把事情做好。</h1>
-              <p>写代码、整理信息，或把任务交给另一个会话。</p>
-              <div className="suggestions">
-                {[
-                  "看看这个项目，从哪里开始？",
-                  "帮我定位并修复一个问题",
-                  "查看其他会话的进展",
-                ].map((t) => (
-                  <button key={t} onClick={() => setDraft(t)}>
-                    {t}
-                    <Icon name="chevron" size={14} />
+        <div
+          className="conversation"
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            followBottom.current =
+              el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+          }}
+        >
+          {!messages.length &&
+            !inputs.length &&
+            !live &&
+            !outgoing &&
+            !loadingHistory && (
+              <section className="welcome">
+                <div className="welcome-art">
+                  <PixelScene />
+                  <span className="scene-tag">EST. 2026 · LOCAL FRONTIER</span>
+                </div>
+                <div className="welcome-copy">
+                  <div className="eyebrow">A LITTLE GRIT. A BIG IDEA.</div>
+                  <h1>
+                    搭档，今天做点什么？<span className="pixel-cursor">_</span>
+                  </h1>
+                  <p>你的本机搭档已就位。写代码、找答案，让想法变成现实。</p>
+                </div>
+                <div className="suggestions">
+                  {[
+                    "看看这个项目，从哪里开始？",
+                    "帮我定位并修复一个问题",
+                    "查看其他会话的进展",
+                  ].map((t) => (
+                    <button key={t} onClick={() => setDraft(t)}>
+                      {t}
+                      <Icon name="chevron" size={14} />
+                    </button>
+                  ))}
+                </div>
+                {!state?.connections.length && (
+                  <button
+                    className="connect-callout"
+                    onClick={() => {
+                      setSettingsTab("模型");
+                      setSettings(true);
+                    }}
+                  >
+                    连接你的模型，开始使用 <Icon name="chevron" size={14} />
                   </button>
-                ))}
+                )}
+              </section>
+            )}
+          <div className="messages" aria-live="polite">
+            {loadingHistory && !outgoing && !inputs.length && (
+              <div className="loading-history">
+                <span className="spinner" />
+                正在读取会话…
               </div>
-              {!state?.connections.length && (
-                <button
-                  className="connect-callout"
-                  onClick={() => {
-                    setSettingsTab("模型");
-                    setSettings(true);
-                  }}
-                >
-                  连接你的模型，开始使用 <Icon name="chevron" size={14} />
-                </button>
-              )}
-            </section>
-          )}
-          <div className="messages">
+            )}
             {messages
               .filter(
                 (m) =>
@@ -582,6 +685,23 @@ function App() {
                           {textOf(m)}
                         </Markdown>
                       </div>
+                      {!!m.bro?.inputs.some((i) => i.attachments?.length) && (
+                        <div className="message-attachments">
+                          {m.bro.inputs
+                            .flatMap((i) => i.attachments || [])
+                            .map((a, i) => (
+                              <button
+                                key={`${a.path}-${i}`}
+                                onClick={() =>
+                                  void run(() => window.bro.open(a.path))
+                                }
+                              >
+                                <Icon name="clip" size={14} />
+                                {a.name}
+                              </button>
+                            ))}
+                        </div>
+                      )}
                       {m.bro?.inputs
                         .flatMap((i) => i.annotations || [])
                         .map((a, i) => (
@@ -617,9 +737,20 @@ function App() {
                 {tool}
               </div>
             )}
+            {outgoing?.sessionId === selected && (
+              <article className="message user sending">
+                <div className="message-author">你 · 发送中</div>
+                <div className="plain-message">{outgoing.text}</div>
+              </article>
+            )}
             {inputs
-              .filter((i) =>
-                ["queued", "failed", "interrupted"].includes(i.status),
+              .filter(
+                (i) =>
+                  i.status !== "cancelled" &&
+                  !messages.some((m) =>
+                    m.bro?.inputs.some((item) => item.id === i.id),
+                  ) &&
+                  i.id !== outgoing?.id,
               )
               .map((i) => (
                 <div className={`queue-item ${i.status}`} key={i.id}>
@@ -628,6 +759,20 @@ function App() {
                   {i.error && <small>{i.error}</small>}
                 </div>
               ))}
+            {!live &&
+              !tool &&
+              ["starting", "waiting", "running"].includes(
+                session?.status || "",
+              ) && (
+                <div className="running-tool">
+                  <span className="spinner" />
+                  {session?.status === "starting"
+                    ? "正在唤醒 bro…"
+                    : session?.status === "waiting"
+                      ? "等待工作目录可用…"
+                      : "bro 正在处理…"}
+                </div>
+              )}
             {session?.error && (
               <div className="inline-error">
                 {session.error}
@@ -678,6 +823,10 @@ function App() {
                 ))}
               </div>
             )}
+            <div className="composer-caption">
+              <span>SEND A DISPATCH</span>
+              <span>● LOCAL</span>
+            </div>
             <textarea
               aria-label="消息"
               placeholder="交给 bro 一件事…"
@@ -687,7 +836,8 @@ function App() {
                 if (
                   e.key === "Enter" &&
                   !e.shiftKey &&
-                  !e.nativeEvent.isComposing
+                  !e.nativeEvent.isComposing &&
+                  e.nativeEvent.keyCode !== 229
                 ) {
                   e.preventDefault();
                   void send();
@@ -757,7 +907,9 @@ function App() {
                   <option value="queue">排队发送</option>
                   <option value="steer">Steer</option>
                 </select>
-                {["running", "waiting"].includes(session?.status || "") && (
+                {["starting", "running", "waiting"].includes(
+                  session?.status || "",
+                ) && (
                   <button
                     className="stop-button"
                     aria-label="停止运行"
@@ -879,7 +1031,7 @@ function SettingsPanel({
   tab,
   setTab,
   close,
-  run,
+  run: runGlobal,
   selected,
 }: {
   state: HostState;
@@ -889,6 +1041,41 @@ function SettingsPanel({
   run: (fn: () => Promise<unknown>) => Promise<void>;
   selected: string | null;
 }) {
+  const [feedback, setFeedback] = useState<{
+    error: boolean;
+    text: string;
+  } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const run = async (fn: () => Promise<unknown>) => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    setFeedback(null);
+    await runGlobal(async () => {
+      try {
+        const value = await fn();
+        setFeedback({ error: false, text: "操作完成" });
+        return value;
+      } catch (error) {
+        setFeedback({
+          error: true,
+          text: errorText(error),
+        });
+        throw error;
+      } finally {
+        savingRef.current = false;
+        setSaving(false);
+      }
+    });
+  };
+  useEffect(() => {
+    setFeedback(null);
+  }, [tab]);
+  const settingsContent = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    settingsContent.current?.scrollTo({ top: 0 });
+  }, [tab]);
   const [loginItem, setLoginItem] = useState(false);
   useEffect(() => {
     void window.bro
@@ -899,7 +1086,7 @@ function SettingsPanel({
   const [editingConnection, setEditingConnection] = useState<string | null>(
     null,
   );
-  const [connection, setConnection] = useState({
+  const emptyConnection = {
     name: "",
     kind: "api",
     baseUrl: "https://api.openai.com/v1",
@@ -910,7 +1097,8 @@ function SettingsPanel({
     api: "openai-completions",
     imageInput: true,
     reasoning: true,
-  });
+  };
+  const [connection, setConnection] = useState(emptyConnection);
   const [feishu, setFeishu] = useState({
     appId: state.feishu.appId || "",
     appSecret: "",
@@ -960,9 +1148,16 @@ function SettingsPanel({
         if (e.target === e.currentTarget) close();
       }}
     >
-      <section className="settings-modal">
+      <section
+        className="settings-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="设置"
+        style={{ "--room-color": rooms[tab].color } as React.CSSProperties}
+      >
         <aside>
-          <h2>设置</h2>
+          <div className="eyebrow">BASE CAMP</div>
+          <h2>工作站设置</h2>
           {["模型", "飞书", "Monitor", "资源", "记忆与实验", "通用"].map(
             (t) => (
               <button
@@ -970,12 +1165,13 @@ function SettingsPanel({
                 key={t}
                 onClick={() => setTab(t)}
               >
-                {t}
+                <PixelIcon kind={rooms[t].icon} />
+                <span>{t}</span>
               </button>
             ),
           )}
         </aside>
-        <div className="settings-content">
+        <div className="settings-content" ref={settingsContent}>
           <button
             className="modal-close icon-button"
             aria-label="关闭设置"
@@ -983,599 +1179,681 @@ function SettingsPanel({
           >
             <Icon name="close" />
           </button>
-          <h2>{tab}</h2>
-          {tab === "模型" && (
-            <>
-              <p className="description">
-                连接 ChatGPT 账号，或使用自己的 API 服务。
-              </p>
-              {state.connections.map((c) => (
-                <div className="connection-card" key={c.id}>
-                  <strong>{c.name}</strong>
-                  <span>{c.model}</span>
-                  <small>
-                    {c.kind === "chatgpt" ? "ChatGPT 账号" : c.baseUrl}
-                  </small>
-                  <div>
+          <div className="room-header">
+            <div>
+              <div className="eyebrow">{rooms[tab].code}</div>
+              <h2>{tab}</h2>
+              <p>{rooms[tab].title}</p>
+            </div>
+            <PixelScene variant={tab} />
+          </div>
+          {feedback && (
+            <div
+              role={feedback.error ? "alert" : "status"}
+              className={`feedback ${feedback.error ? "failure" : "success"}`}
+            >
+              {feedback.text}
+            </div>
+          )}
+          <fieldset
+            className="settings-fields"
+            disabled={saving}
+            aria-busy={saving}
+          >
+            {tab === "模型" && (
+              <>
+                <p className="description">
+                  连接 ChatGPT 账号，或使用自己的 API 服务。
+                </p>
+                {state.connections.map((c) => (
+                  <div className="connection-card" key={c.id}>
+                    <strong>{c.name}</strong>
+                    <span>{c.model}</span>
+                    <small>
+                      {c.kind === "chatgpt" ? "ChatGPT 账号" : c.baseUrl}
+                    </small>
+                    <div className="card-actions">
+                      <button
+                        onClick={() => {
+                          setEditingConnection(c.id);
+                          setConnection({
+                            name: c.name,
+                            kind: c.kind,
+                            baseUrl: c.baseUrl || "",
+                            apiKey: "",
+                            model: c.model,
+                            contextWindow: String(c.contextWindow),
+                            maxTokens: String(c.maxTokens),
+                            api: c.api || "openai-completions",
+                            imageInput: c.imageInput,
+                            reasoning: c.reasoning,
+                          });
+                        }}
+                      >
+                        修改
+                      </button>
+                      <button
+                        onClick={() =>
+                          void run(() =>
+                            api("/settings", "PATCH", {
+                              defaultConnectionId: c.id,
+                            }),
+                          )
+                        }
+                      >
+                        {state.settings.defaultConnectionId === c.id
+                          ? "✓ 默认连接"
+                          : "设为默认"}
+                      </button>
+                      <button
+                        onClick={() =>
+                          void run(async () => {
+                            await api(`/connections/${c.id}`, "DELETE");
+                            if (editingConnection === c.id)
+                              setEditingConnection(null);
+                          })
+                        }
+                      >
+                        删除连接
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {editingConnection && (
+                  <div className="notice">
+                    正在修改已有连接；API Key 留空保留原值。
                     <button
                       onClick={() => {
-                        setEditingConnection(c.id);
-                        setConnection({
-                          name: c.name,
-                          kind: c.kind,
-                          baseUrl: c.baseUrl || "",
-                          apiKey: "",
-                          model: c.model,
-                          contextWindow: String(c.contextWindow),
-                          maxTokens: String(c.maxTokens),
-                          api: c.api || "openai-completions",
-                          imageInput: c.imageInput,
-                          reasoning: c.reasoning,
-                        });
+                        setEditingConnection(null);
+                        setConnection(emptyConnection);
                       }}
                     >
-                      修改
+                      改为新增连接
                     </button>
+                  </div>
+                )}
+                <div className="segmented">
+                  <button
+                    className={connection.kind === "api" ? "active" : ""}
+                    onClick={() => update("kind", "api")}
+                  >
+                    API Key
+                  </button>
+                  <button
+                    className={connection.kind === "chatgpt" ? "active" : ""}
+                    onClick={() => update("kind", "chatgpt")}
+                  >
+                    ChatGPT
+                  </button>
+                </div>
+                {connection.kind === "chatgpt" ? (
+                  <div>
+                    <p className="description">
+                      用你的 ChatGPT 账号登录，授权信息保存在本机。
+                    </p>
+                    {auth?.accounts?.length ? (
+                      <div className="connection-card">
+                        <strong>账号已连接</strong>
+                        <span>
+                          {auth.accounts[0].email || auth.accounts[0].accountId}
+                        </span>
+                        <button
+                          onClick={() =>
+                            void run(() => api("/auth/logout", "POST", {}))
+                          }
+                        >
+                          退出
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        className="primary"
+                        onClick={() =>
+                          void run(() => api("/auth/login", "POST", {}))
+                        }
+                      >
+                        登录 ChatGPT
+                      </button>
+                    )}
+                    {auth?.url && (
+                      <button
+                        className="secondary"
+                        onClick={() =>
+                          void run(() => window.bro.open(auth.url))
+                        }
+                      >
+                        打开浏览器授权
+                      </button>
+                    )}
+                    {auth?.instructions && (
+                      <p className="description">{auth.instructions}</p>
+                    )}
+                    {auth?.error && <div className="notice">{auth.error}</div>}
+                    {auth?.prompt && (
+                      <>
+                        <Field
+                          label={auth.prompt}
+                          value={authAnswer}
+                          onChange={setAuthAnswer}
+                        />
+                        <button
+                          className="secondary"
+                          onClick={() =>
+                            void run(() =>
+                              api("/auth/answer", "POST", {
+                                value: authAnswer,
+                              }),
+                            )
+                          }
+                        >
+                          提交授权信息
+                        </button>
+                      </>
+                    )}
+                    <Field
+                      label="连接名称"
+                      value={connection.name}
+                      onChange={(v) => update("name", v)}
+                      placeholder="ChatGPT"
+                    />
+                    <label className="field">
+                      模型
+                      <select
+                        value={connection.model}
+                        onChange={(e) => update("model", e.target.value)}
+                      >
+                        <option value="">选择模型</option>
+                        {auth?.models?.map((m: any) => (
+                          <option key={m.id} value={m.id}>
+                            {m.name || m.id}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                     <button
+                      className="primary"
+                      disabled={!auth?.accounts?.length || !connection.model}
                       onClick={() =>
+                        void run(async () => {
+                          const saved = await api("/connections", "POST", {
+                            ...connection,
+                            ...auth.models.find(
+                              (m: any) => m.id === connection.model,
+                            ),
+                            id: editingConnection || undefined,
+                            name: connection.name || "ChatGPT",
+                            model: connection.model,
+                            apiKey: undefined,
+                          });
+                          setEditingConnection(saved.id);
+                        })
+                      }
+                    >
+                      {editingConnection ? "保存修改" : "保存账号连接"}
+                    </button>
+                  </div>
+                ) : (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void run(async () => {
+                        const saved = await api("/connections", "POST", {
+                          ...connection,
+                          id: editingConnection || undefined,
+                        });
+                        setConnection((c) => ({ ...c, apiKey: "" }));
+                        setEditingConnection(saved.id);
+                      });
+                    }}
+                  >
+                    <Field
+                      label="连接名称"
+                      value={connection.name}
+                      onChange={(v) => update("name", v)}
+                      placeholder="我的模型"
+                    />
+                    <Field
+                      label="Base URL"
+                      value={connection.baseUrl}
+                      onChange={(v) => update("baseUrl", v)}
+                    />
+                    <Field
+                      label="API Key"
+                      type="password"
+                      value={connection.apiKey}
+                      onChange={(v) => update("apiKey", v)}
+                    />
+                    <Field
+                      label="模型 ID"
+                      value={connection.model}
+                      onChange={(v) => update("model", v)}
+                      placeholder="服务商提供的模型名称"
+                    />
+                    <label className="field">
+                      接口协议
+                      <select
+                        value={connection.api}
+                        onChange={(e) => update("api", e.target.value)}
+                      >
+                        <option value="openai-completions">
+                          OpenAI Chat Completions
+                        </option>
+                        <option value="openai-responses">
+                          OpenAI Responses
+                        </option>
+                        <option value="anthropic-messages">
+                          Anthropic Messages
+                        </option>
+                      </select>
+                    </label>
+                    <Field
+                      label="上下文窗口 tokens"
+                      value={connection.contextWindow}
+                      onChange={(v) => update("contextWindow", v)}
+                    />
+                    <Field
+                      label="最大输出 tokens"
+                      value={connection.maxTokens}
+                      onChange={(v) => update("maxTokens", v)}
+                    />
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={connection.imageInput}
+                        onChange={(e) => update("imageInput", e.target.checked)}
+                      />
+                      支持图片输入
+                    </label>
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={connection.reasoning}
+                        onChange={(e) => update("reasoning", e.target.checked)}
+                      />
+                      支持推理强度
+                    </label>
+                    <button className="primary">
+                      {editingConnection ? "保存修改" : "保存连接"}
+                    </button>
+                  </form>
+                )}
+              </>
+            )}
+            {tab === "飞书" && (
+              <>
+                <p className="description">
+                  私聊连接一个会话；群聊按成员分别续接，被可信成员 @ 时才回复。
+                </p>
+                <div className="status-row">
+                  <span
+                    className={`status-dot ${state.feishu.connected ? "idle" : "error"}`}
+                  />
+                  {state.feishu.connected ? "连接已启动" : "尚未连接"}
+                </div>
+                {state.feishu.error && (
+                  <div className="notice">{state.feishu.error}</div>
+                )}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void run(() =>
+                      api("/feishu", "POST", { ...feishu, enabled: true }),
+                    );
+                  }}
+                >
+                  <Field
+                    label="App ID"
+                    value={feishu.appId}
+                    onChange={(v) => setFeishu((x) => ({ ...x, appId: v }))}
+                  />
+                  <Field
+                    label="App Secret"
+                    type="password"
+                    value={feishu.appSecret}
+                    onChange={(v) => setFeishu((x) => ({ ...x, appSecret: v }))}
+                  />
+                  <Field
+                    label="Bot open_id（可留空自动获取）"
+                    value={feishu.botId}
+                    onChange={(v) => setFeishu((x) => ({ ...x, botId: v }))}
+                  />
+                  <button className="primary">保存并连接</button>
+                </form>
+                <hr />
+                <h3>受信任的人</h3>
+                <p className="description">
+                  首次填写你自己的 open_id。每行一个；名单内均可完整使用 bro。
+                </p>
+                <textarea
+                  className="settings-textarea"
+                  aria-label="受信任的飞书用户"
+                  value={trusted}
+                  onChange={(e) => setTrusted(e.target.value)}
+                  placeholder="ou_…"
+                />
+                <button
+                  className="secondary"
+                  onClick={() =>
+                    void run(() =>
+                      api("/settings", "PATCH", {
+                        trustedFeishuUsers: trusted
+                          .split(/\s+/)
+                          .filter(Boolean),
+                      }),
+                    )
+                  }
+                >
+                  保存名单
+                </button>
+              </>
+            )}
+            {tab === "飞书" && <OutboxPanel run={run} />}
+            {tab === "Monitor" && (
+              <>
+                <h3>入口绑定</h3>
+                {!state.bindings.length && (
+                  <p className="empty-note">
+                    还没有入口绑定。连接消息来源后，它们会出现在这里。
+                  </p>
+                )}
+                {state.bindings.map((b) => (
+                  <label className="field" key={b.key}>
+                    {b.key}
+                    <select
+                      value={b.sessionId}
+                      onChange={(e) =>
                         void run(() =>
-                          api("/settings", "PATCH", {
-                            defaultConnectionId: c.id,
+                          api("/bindings", "POST", {
+                            key: b.key,
+                            sessionId: e.target.value,
                           }),
                         )
                       }
                     >
-                      {state.settings.defaultConnectionId === c.id
-                        ? "默认连接"
-                        : "设为默认"}
-                    </button>
+                      {state.sessions.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ))}
+                <p className="description">
+                  后台监听已配置的事件源，将新事件排入目标会话。无事件时不调用模型。
+                </p>
+                {state.subscriptions.map((s) => (
+                  <div className="connection-card" key={s.id}>
+                    <strong>{s.name}</strong>
+                    <span>
+                      {s.kind} · {s.enabled ? "已启用" : "已停用"}
+                    </span>
+                    {state.monitorErrors[s.id] && (
+                      <small className="danger">
+                        {state.monitorErrors[s.id]}
+                      </small>
+                    )}
                     <button
                       onClick={() =>
-                        void run(async () => {
-                          await api(`/connections/${c.id}`, "DELETE");
-                          if (editingConnection === c.id)
-                            setEditingConnection(null);
-                        })
+                        void run(() =>
+                          api("/subscriptions", "POST", {
+                            ...s,
+                            enabled: !s.enabled,
+                          }),
+                        )
                       }
                     >
-                      删除连接
+                      {s.enabled ? "停用" : "启用"}
                     </button>
                   </div>
-                </div>
-              ))}
-              {editingConnection && (
-                <div className="notice">
-                  正在修改已有连接；API Key 留空保留原值。
-                  <button onClick={() => setEditingConnection(null)}>
-                    改为新增连接
-                  </button>
-                </div>
-              )}
-              <div className="segmented">
-                <button
-                  className={connection.kind === "api" ? "active" : ""}
-                  onClick={() => update("kind", "api")}
+                ))}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void run(async () => {
+                      await api("/subscriptions", "POST", {
+                        ...subscription,
+                        command:
+                          subscription.kind === "process"
+                            ? JSON.parse(subscription.command)
+                            : undefined,
+                        trustedSenders: subscription.trustedSenders
+                          .split(/\s+/)
+                          .filter(Boolean),
+                      });
+                      setSubscription((s) => ({ ...s, name: "", token: "" }));
+                    });
+                  }}
                 >
-                  API Key
-                </button>
-                <button
-                  className={connection.kind === "chatgpt" ? "active" : ""}
-                  onClick={() => update("kind", "chatgpt")}
-                >
-                  ChatGPT
-                </button>
-              </div>
-              {connection.kind === "chatgpt" ? (
-                <div>
-                  <p className="description">
-                    使用 OMP 的 ChatGPT 授权流程，账号凭据只保存在 bro
-                    数据目录。
-                  </p>
-                  {auth?.accounts?.length ? (
-                    <div className="connection-card">
-                      <strong>账号已连接</strong>
-                      <span>
-                        {auth.accounts[0].email || auth.accounts[0].accountId}
-                      </span>
-                      <button
-                        onClick={() =>
-                          void run(() => api("/auth/logout", "POST", {}))
-                        }
-                      >
-                        退出
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      className="primary"
-                      onClick={() =>
-                        void run(() => api("/auth/login", "POST", {}))
-                      }
-                    >
-                      登录 ChatGPT
-                    </button>
-                  )}
-                  {auth?.url && (
-                    <button
-                      className="secondary"
-                      onClick={() => void run(() => window.bro.open(auth.url))}
-                    >
-                      打开浏览器授权
-                    </button>
-                  )}
-                  {auth?.instructions && (
-                    <p className="description">{auth.instructions}</p>
-                  )}
-                  {auth?.error && <div className="notice">{auth.error}</div>}
-                  {auth?.prompt && (
-                    <>
-                      <Field
-                        label={auth.prompt}
-                        value={authAnswer}
-                        onChange={setAuthAnswer}
-                      />
-                      <button
-                        className="secondary"
-                        onClick={() =>
-                          void run(() =>
-                            api("/auth/answer", "POST", { value: authAnswer }),
-                          )
-                        }
-                      >
-                        提交授权信息
-                      </button>
-                    </>
-                  )}
                   <Field
-                    label="连接名称"
-                    value={connection.name}
-                    onChange={(v) => update("name", v)}
-                    placeholder="ChatGPT"
+                    label="订阅名称"
+                    value={subscription.name}
+                    onChange={(v) =>
+                      setSubscription((s) => ({ ...s, name: v }))
+                    }
                   />
                   <label className="field">
-                    模型
+                    来源
                     <select
-                      value={connection.model}
-                      onChange={(e) => update("model", e.target.value)}
+                      value={subscription.kind}
+                      onChange={(e) =>
+                        setSubscription((s) => ({ ...s, kind: e.target.value }))
+                      }
                     >
-                      <option value="">选择模型</option>
-                      {auth?.models?.map((m: any) => (
-                        <option key={m.id} value={m.id}>
-                          {m.name || m.id}
+                      <option value="sse">SSE 事件</option>
+                      <option value="peer">Peer Relay</option>
+                      <option value="file">文件变化</option>
+                      <option value="process">进程输出</option>
+                    </select>
+                  </label>
+                  {["sse", "peer"].includes(subscription.kind) ? (
+                    <Field
+                      label="SSE 地址"
+                      value={subscription.url}
+                      onChange={(v) =>
+                        setSubscription((s) => ({ ...s, url: v }))
+                      }
+                    />
+                  ) : subscription.kind === "file" ? (
+                    <Field
+                      label="文件路径"
+                      value={subscription.path}
+                      onChange={(v) =>
+                        setSubscription((s) => ({ ...s, path: v }))
+                      }
+                    />
+                  ) : (
+                    <Field
+                      label="命令参数数组"
+                      placeholder={'["程序", "参数"]'}
+                      value={subscription.command}
+                      onChange={(v) =>
+                        setSubscription((s) => ({ ...s, command: v }))
+                      }
+                    />
+                  )}
+                  {subscription.kind === "peer" && (
+                    <>
+                      <Field
+                        label="bro 的 Peer 身份"
+                        value={subscription.me}
+                        onChange={(v) =>
+                          setSubscription((s) => ({ ...s, me: v }))
+                        }
+                      />
+                      <Field
+                        label="Relay Token"
+                        type="password"
+                        value={subscription.token}
+                        onChange={(v) =>
+                          setSubscription((s) => ({ ...s, token: v }))
+                        }
+                      />
+                      <Field
+                        label="受信任的 Peer（空格分隔）"
+                        value={subscription.trustedSenders}
+                        onChange={(v) =>
+                          setSubscription((s) => ({ ...s, trustedSenders: v }))
+                        }
+                      />
+                    </>
+                  )}
+                  <label className="field">
+                    目标会话
+                    <select
+                      value={subscription.targetSessionId}
+                      onChange={(e) =>
+                        setSubscription((s) => ({
+                          ...s,
+                          targetSessionId: e.target.value,
+                        }))
+                      }
+                    >
+                      <option value="">选择会话</option>
+                      {state.sessions.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.title}
                         </option>
                       ))}
                     </select>
                   </label>
                   <button
                     className="primary"
-                    disabled={!auth?.accounts?.length || !connection.model}
-                    onClick={() =>
-                      void run(() =>
-                        api("/connections", "POST", {
-                          ...connection,
-                          ...auth.models.find(
-                            (m: any) => m.id === connection.model,
-                          ),
-                          id: editingConnection || undefined,
-                          name: connection.name || "ChatGPT",
-                          model: connection.model,
-                          apiKey: undefined,
-                        }),
-                      )
+                    disabled={
+                      !subscription.name.trim() || !subscription.targetSessionId
                     }
                   >
-                    保存账号连接
+                    添加监听
                   </button>
-                </div>
-              ) : (
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void run(async () => {
-                      await api("/connections", "POST", {
-                        ...connection,
-                        id: editingConnection || undefined,
-                      });
-                      setConnection((c) => ({ ...c, apiKey: "" }));
-                    });
-                  }}
-                >
-                  <Field
-                    label="连接名称"
-                    value={connection.name}
-                    onChange={(v) => update("name", v)}
-                    placeholder="我的模型"
-                  />
-                  <Field
-                    label="Base URL"
-                    value={connection.baseUrl}
-                    onChange={(v) => update("baseUrl", v)}
-                  />
-                  <Field
-                    label="API Key"
-                    type="password"
-                    value={connection.apiKey}
-                    onChange={(v) => update("apiKey", v)}
-                  />
-                  <Field
-                    label="模型 ID"
-                    value={connection.model}
-                    onChange={(v) => update("model", v)}
-                    placeholder="服务商提供的模型名称"
-                  />
-                  <label className="field">
-                    接口协议
-                    <select
-                      value={connection.api}
-                      onChange={(e) => update("api", e.target.value)}
-                    >
-                      <option value="openai-completions">
-                        OpenAI Chat Completions
-                      </option>
-                      <option value="openai-responses">OpenAI Responses</option>
-                      <option value="anthropic-messages">
-                        Anthropic Messages
-                      </option>
-                    </select>
-                  </label>
-                  <Field
-                    label="上下文窗口 tokens"
-                    value={connection.contextWindow}
-                    onChange={(v) => update("contextWindow", v)}
-                  />
-                  <Field
-                    label="最大输出 tokens"
-                    value={connection.maxTokens}
-                    onChange={(v) => update("maxTokens", v)}
-                  />
-                  <label className="check">
-                    <input
-                      type="checkbox"
-                      checked={connection.imageInput}
-                      onChange={(e) => update("imageInput", e.target.checked)}
-                    />
-                    支持图片输入
-                  </label>
-                  <label className="check">
-                    <input
-                      type="checkbox"
-                      checked={connection.reasoning}
-                      onChange={(e) => update("reasoning", e.target.checked)}
-                    />
-                    支持推理强度
-                  </label>
-                  <button className="primary">保存连接</button>
                 </form>
-              )}
-            </>
-          )}
-          {tab === "飞书" && (
-            <>
-              <p className="description">
-                私聊连接一个会话；群聊按成员分别续接，被可信成员 @ 时才回复。
-              </p>
-              <div className="status-row">
-                <span
-                  className={`status-dot ${state.feishu.connected ? "idle" : "error"}`}
-                />
-                {state.feishu.connected ? "连接已启动" : "尚未连接"}
-              </div>
-              {state.feishu.error && (
-                <div className="notice">{state.feishu.error}</div>
-              )}
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void run(() =>
-                    api("/feishu", "POST", { ...feishu, enabled: true }),
-                  );
-                }}
-              >
-                <Field
-                  label="App ID"
-                  value={feishu.appId}
-                  onChange={(v) => setFeishu((x) => ({ ...x, appId: v }))}
-                />
-                <Field
-                  label="App Secret"
-                  type="password"
-                  value={feishu.appSecret}
-                  onChange={(v) => setFeishu((x) => ({ ...x, appSecret: v }))}
-                />
-                <Field
-                  label="Bot open_id（可留空自动获取）"
-                  value={feishu.botId}
-                  onChange={(v) => setFeishu((x) => ({ ...x, botId: v }))}
-                />
-                <button className="primary">保存并连接</button>
-              </form>
-              <hr />
-              <h3>受信任的人</h3>
-              <p className="description">
-                首次填写你自己的 open_id。每行一个；名单内均可完整使用 bro。
-              </p>
-              <textarea
-                className="settings-textarea"
-                value={trusted}
-                onChange={(e) => setTrusted(e.target.value)}
-                placeholder="ou_…"
-              />
-              <button
-                className="secondary"
-                onClick={() =>
-                  void run(() =>
-                    api("/settings", "PATCH", {
-                      trustedFeishuUsers: trusted.split(/\s+/).filter(Boolean),
-                    }),
-                  )
-                }
-              >
-                保存名单
-              </button>
-            </>
-          )}
-          {tab === "飞书" && <OutboxPanel run={run} />}
-          {tab === "Monitor" && (
-            <>
-              <h3>入口绑定</h3>
-              {state.bindings.map((b) => (
-                <label className="field" key={b.key}>
-                  {b.key}
-                  <select
-                    value={b.sessionId}
-                    onChange={(e) =>
-                      void run(() =>
-                        api("/bindings", "POST", {
-                          key: b.key,
-                          sessionId: e.target.value,
-                        }),
-                      )
-                    }
-                  >
-                    {state.sessions.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.title}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ))}
-              <p className="description">
-                后台监听已配置的事件源，将新事件排入目标会话。无事件时不调用模型。
-              </p>
-              {state.subscriptions.map((s) => (
-                <div className="connection-card" key={s.id}>
-                  <strong>{s.name}</strong>
-                  <span>
-                    {s.kind} · {s.enabled ? "已启用" : "已停用"}
-                  </span>
-                  {state.monitorErrors[s.id] && (
-                    <small className="danger">
-                      {state.monitorErrors[s.id]}
-                    </small>
-                  )}
-                  <button
-                    onClick={() =>
-                      void run(() =>
-                        api("/subscriptions", "POST", {
-                          ...s,
-                          enabled: !s.enabled,
-                        }),
-                      )
-                    }
-                  >
-                    {s.enabled ? "停用" : "启用"}
-                  </button>
-                </div>
-              ))}
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void run(() =>
-                    api("/subscriptions", "POST", {
-                      ...subscription,
-                      command:
-                        subscription.kind === "process"
-                          ? JSON.parse(subscription.command)
-                          : undefined,
-                      trustedSenders: subscription.trustedSenders
-                        .split(/\s+/)
-                        .filter(Boolean),
-                    }),
-                  );
-                }}
-              >
-                <Field
-                  label="订阅名称"
-                  value={subscription.name}
-                  onChange={(v) => setSubscription((s) => ({ ...s, name: v }))}
-                />
-                <label className="field">
-                  来源
-                  <select
-                    value={subscription.kind}
-                    onChange={(e) =>
-                      setSubscription((s) => ({ ...s, kind: e.target.value }))
-                    }
-                  >
-                    <option value="sse">SSE 事件</option>
-                    <option value="peer">Peer Relay</option>
-                    <option value="file">文件变化</option>
-                    <option value="process">进程输出</option>
-                  </select>
-                </label>
-                {["sse", "peer"].includes(subscription.kind) ? (
-                  <Field
-                    label="SSE 地址"
-                    value={subscription.url}
-                    onChange={(v) => setSubscription((s) => ({ ...s, url: v }))}
-                  />
-                ) : subscription.kind === "file" ? (
-                  <Field
-                    label="文件路径"
-                    value={subscription.path}
-                    onChange={(v) =>
-                      setSubscription((s) => ({ ...s, path: v }))
-                    }
-                  />
-                ) : (
-                  <Field
-                    label="命令参数数组"
-                    placeholder={'["程序", "参数"]'}
-                    value={subscription.command}
-                    onChange={(v) =>
-                      setSubscription((s) => ({ ...s, command: v }))
-                    }
-                  />
-                )}
-                {subscription.kind === "peer" && (
-                  <>
-                    <Field
-                      label="bro 的 Peer 身份"
-                      value={subscription.me}
-                      onChange={(v) =>
-                        setSubscription((s) => ({ ...s, me: v }))
-                      }
-                    />
-                    <Field
-                      label="Relay Token"
-                      type="password"
-                      value={subscription.token}
-                      onChange={(v) =>
-                        setSubscription((s) => ({ ...s, token: v }))
-                      }
-                    />
-                    <Field
-                      label="受信任的 Peer（空格分隔）"
-                      value={subscription.trustedSenders}
-                      onChange={(v) =>
-                        setSubscription((s) => ({ ...s, trustedSenders: v }))
-                      }
-                    />
-                  </>
-                )}
-                <label className="field">
-                  目标会话
-                  <select
-                    value={subscription.targetSessionId}
-                    onChange={(e) =>
-                      setSubscription((s) => ({
-                        ...s,
-                        targetSessionId: e.target.value,
-                      }))
-                    }
-                  >
-                    <option value="">选择会话</option>
-                    {state.sessions.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.title}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button className="primary">添加监听</button>
-              </form>
-            </>
-          )}
-          {tab === "资源" && <ResourcePanel state={state} run={run} />}
-          {tab === "记忆与实验" && (
-            <ExperimentPanel state={state} run={run} selected={selected} />
-          )}
-          {tab === "通用" && (
-            <>
-              <h3>工作目录</h3>
-              <p className="description">普通聊天和首次飞书会话使用此目录。</p>
-              <div className="path-value">{state.settings.defaultCwd}</div>
-              <button
-                className="secondary"
-                onClick={() =>
-                  void run(async () => {
-                    const path = await window.bro.directory();
-                    if (path)
-                      await api("/settings", "PATCH", { defaultCwd: path });
-                  })
-                }
-              >
-                更改目录
-              </button>
-              <hr />
-              <h3>后台服务</h3>
-              <label className="switch-row">
-                <span>登录电脑后启动后台</span>
-                <input
-                  type="checkbox"
-                  checked={loginItem}
-                  onChange={(e) =>
-                    void run(async () =>
-                      setLoginItem(
-                        await window.bro.loginItem(e.target.checked),
-                      ),
-                    )
-                  }
-                />
-              </label>
-              <p className="description">
-                关闭窗口后，Monitor 和正在运行的任务继续工作。
-              </p>
-              <button
-                className="secondary"
-                onClick={() =>
-                  void run(async () => {
-                    const info = await api("/diagnostics");
-                    await window.bro.open(info.dataRoot);
-                  })
-                }
-              >
-                打开数据目录
-              </button>
-              <hr />
-              <button
-                className="secondary"
-                onClick={() => void run(() => window.bro.stopHost())}
-              >
-                停止后台并退出（中断任务）
-              </button>
-              <hr />
-              <h3>Computer Use</h3>
-              <p className="description">
-                使用本机屏幕与辅助功能。检测到你操作键鼠时暂停，由你手动继续。首次使用需要系统权限。
-              </p>
-              <label className="switch-row">
-                <span>启用桌面操作</span>
-                <input
-                  type="checkbox"
-                  checked={state.settings.computer}
-                  onChange={(e) =>
-                    void run(() =>
-                      api("/settings", "PATCH", { computer: e.target.checked }),
-                    )
-                  }
-                />
-              </label>
-              <p className="description">{state.desktop.reason}</p>
-              <button
-                className="secondary"
-                onClick={() => void run(() => api("/desktop"))}
-              >
-                检测系统权限
-              </button>
-              {state.desktop.paused && (
+              </>
+            )}
+            {tab === "资源" && <ResourcePanel state={state} run={run} />}
+            {tab === "记忆与实验" && (
+              <ExperimentPanel state={state} run={run} selected={selected} />
+            )}
+            {tab === "通用" && (
+              <>
+                <h3>工作目录</h3>
+                <p className="description">
+                  普通聊天和首次飞书会话使用此目录。
+                </p>
+                <div className="path-value">{state.settings.defaultCwd}</div>
                 <button
                   className="secondary"
                   onClick={() =>
-                    void run(() => api("/desktop/resume", "POST", {}))
+                    void run(async () => {
+                      const path = await window.bro.directory();
+                      if (path)
+                        await api("/settings", "PATCH", { defaultCwd: path });
+                    })
                   }
                 >
-                  手动继续桌面操作
+                  更改目录
                 </button>
-              )}
-              {state.desktop.capabilities && (
-                <pre className="capabilities">
-                  {JSON.stringify(state.desktop.capabilities, null, 2)}
-                </pre>
-              )}
-            </>
-          )}
+                <hr />
+                <h3>后台服务</h3>
+                <label className="switch-row">
+                  <span>登录电脑后启动后台</span>
+                  <input
+                    type="checkbox"
+                    checked={loginItem}
+                    onChange={(e) =>
+                      void run(async () =>
+                        setLoginItem(
+                          await window.bro.loginItem(e.target.checked),
+                        ),
+                      )
+                    }
+                  />
+                </label>
+                <p className="description">
+                  关闭窗口后，Monitor 和正在运行的任务继续工作。
+                </p>
+                <button
+                  className="secondary"
+                  onClick={() =>
+                    void run(async () => {
+                      const info = await api("/diagnostics");
+                      await window.bro.open(info.dataRoot);
+                    })
+                  }
+                >
+                  打开数据目录
+                </button>
+                <hr />
+                <button
+                  className="secondary"
+                  onClick={() => void run(() => window.bro.stopHost())}
+                >
+                  停止后台并退出（中断任务）
+                </button>
+                <hr />
+                <h3>Computer Use</h3>
+                <p className="description">
+                  使用本机屏幕与辅助功能。检测到你操作键鼠时暂停，由你手动继续。首次使用需要系统权限。
+                </p>
+                <label className="switch-row">
+                  <span>启用桌面操作</span>
+                  <input
+                    type="checkbox"
+                    checked={state.settings.computer}
+                    onChange={(e) =>
+                      void run(() =>
+                        api("/settings", "PATCH", {
+                          computer: e.target.checked,
+                        }),
+                      )
+                    }
+                  />
+                </label>
+                <p className="description">{state.desktop.reason}</p>
+                <button
+                  className="secondary"
+                  onClick={() => void run(() => api("/desktop"))}
+                >
+                  检测系统权限
+                </button>
+                {state.desktop.paused && (
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      void run(() => api("/desktop/resume", "POST", {}))
+                    }
+                  >
+                    手动继续桌面操作
+                  </button>
+                )}
+                {state.desktop.capabilities && (
+                  <div className="capabilities">
+                    {(
+                      [
+                        ["屏幕截图", "capture"],
+                        ["鼠标与键盘", "input"],
+                        ["界面控件读取", "ax"],
+                        ["后台窗口输入", "backgroundWindowInput"],
+                        ["人工接管检测", "takeover"],
+                      ] as const
+                    ).map(([label, key]) => (
+                      <div className="capability-row" key={key}>
+                        <span>{label}</span>
+                        <strong>
+                          {state.desktop.capabilities?.[key]
+                            ? "可用"
+                            : "未就绪"}
+                        </strong>
+                      </div>
+                    ))}
+                    <details>
+                      <summary>技术详情</summary>
+                      <pre>
+                        {JSON.stringify(state.desktop.capabilities, null, 2)}
+                      </pre>
+                    </details>
+                  </div>
+                )}
+              </>
+            )}
+          </fieldset>
         </div>
       </section>
     </div>

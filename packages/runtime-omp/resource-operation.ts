@@ -6,7 +6,7 @@ import { existsSync, mkdirSync } from "node:fs";
 const request = (await Bun.stdin.json()) as any;
 process.env.PI_CODING_AGENT_DIR = join(request.root, "agent");
 mkdirSync(process.env.PI_CODING_AGENT_DIR, { recursive: true });
-const moduleName = "@oh-my-pi/pi-coding-agent";
+
 const base = resolve(
   import.meta.dir,
   "../../node_modules/@oh-my-pi/pi-coding-agent/src",
@@ -51,9 +51,8 @@ try {
       path = target;
     }
     if (!existsSync(path)) throw new Error("Skill 路径不存在");
-    const skillModule = join(base, "extensibility/skills.ts");
-    const { loadSkillsFromDir } = await import(skillModule);
-    const loaded = await loadSkillsFromDir({ dir: path, source: "bro:user" });
+    const { loadBroSkills } = await import("./resources");
+    const loaded = await loadBroSkills(path, "bro:user");
     if (!loaded.skills.length)
       throw new Error(
         "此目录没有有效的 SKILL.md：" +

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../apps/host/store";
@@ -164,6 +164,34 @@ test("stopping Monitor settles an in-flight reply and prevents sends after datab
     await monitor.flush();
   } finally {
     await server.stop(true);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("explicit Skill directories load directly, preserve metadata, and exclude sibling directories", async () => {
+  const { loadBroSkills } = await import("../packages/runtime-omp/resources");
+  const root = mkdtempSync(join(tmpdir(), "bro-skill-root-"));
+  try {
+    for (const name of ["chosen", "unrelated"]) {
+      mkdirSync(join(root, name));
+      writeFileSync(
+        join(root, name, "SKILL.md"),
+        `---\nname: ${name}\ndescription: Test fixture\nhide: true\n---\nFixture.`,
+      );
+    }
+    const direct = await loadBroSkills(join(root, "chosen"), "bro:user");
+    expect(direct.skills.map((s: any) => s.name)).toEqual(["chosen"]);
+    expect(direct.skills[0].baseDir).toBe(join(root, "chosen"));
+    expect(direct.skills[0].hide).toBe(true);
+    const collection = await loadBroSkills(root, "bro:project");
+    expect(collection.skills.map((s: any) => s.name)).toEqual([
+      "chosen",
+      "unrelated",
+    ]);
+    expect(
+      collection.skills.every((s: any) => s.source === "bro:project"),
+    ).toBe(true);
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });

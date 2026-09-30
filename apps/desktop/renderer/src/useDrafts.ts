@@ -39,6 +39,27 @@ export function useDrafts(sessionId: string | null) {
     });
   }
   return {
+    clearSubmitted: (submitted: Draft) => {
+      setDrafts((old) => {
+        if (JSON.stringify(old[key]) !== JSON.stringify(submitted)) return old;
+        const next = { ...old, [key]: empty };
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+    },
+    restoreDraft: (id: string | null, submitted: Draft) => {
+      setDrafts((old) => {
+        const target = id || "new";
+        if (old[target]?.text) return old;
+        const next = { ...old, [target]: submitted };
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+    },
     draft: draft.text,
     setDraft: (value: string) => update("text", value),
     attachments: draft.attachments,
