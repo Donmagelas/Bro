@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useId, useState } from "react";
 import type { HostState } from "../../../../packages/contracts";
 import { PixelIcon } from "./PixelScene";
 
@@ -22,6 +22,7 @@ export function FeishuPanel({
   });
   const [setupBusy, setSetupBusy] = useState(false);
   const [replace, setReplace] = useState(false);
+  const pairingHelpId = useId();
   const setup = state.feishu.setup || { status: "idle" };
   const activeSetup = ["starting", "waiting", "connecting"].includes(
     setup.status,
@@ -91,7 +92,7 @@ export function FeishuPanel({
           <>
             <p>
               用飞书扫码，在官方页面完成创建。确认后 Bro
-              会自动连接，并将创建人设为受信任的人。
+              会自动连接，并将创建人设为受信任的人，通常无需发送配对码。
             </p>
             <img
               className="feishu-qr"
@@ -142,7 +143,30 @@ export function FeishuPanel({
             <p>
               在飞书私聊这个机器人，发送以下配对码。绑定后仅发送该配对码的账号受信任，配对消息不会交给模型执行。
             </p>
-            <code className="feishu-pairing-code">{setup.pairingCode}</code>
+            <div className="feishu-pairing-row">
+              <code className="feishu-pairing-code">{setup.pairingCode}</code>
+              <span className="feishu-pairing-help">
+                <button
+                  type="button"
+                  className="feishu-help-button"
+                  aria-label="为什么需要配对码？"
+                  aria-describedby={pairingHelpId}
+                >
+                  ?
+                </button>
+                <span
+                  id={pairingHelpId}
+                  role="tooltip"
+                  className="feishu-help-tooltip"
+                >
+                  通常扫码确认后，Bro 会自动连接并信任创建人，无需发送配对码。
+                  <br />
+                  只有未获取到创建人身份，或你选择重新绑定本人时，才需要私聊机器人发送此码。
+                  <br />
+                  配对码 10 分钟内有效，使用一次即失效。
+                </span>
+              </span>
+            </div>
             <p className="description">
               有效至{" "}
               {setup.pairingExpiresAt
@@ -225,7 +249,9 @@ export function FeishuPanel({
               </>
             ) : (
               <>
-                <p>用飞书扫码确认，自动完成应用配置和本人绑定。</p>
+                <p>
+                  用飞书扫码确认，自动完成应用配置和本人绑定，通常无需发送配对码。
+                </p>
                 <button
                   className="primary"
                   disabled={setupBusy}
