@@ -206,10 +206,22 @@ svg {
   background: #f2d4a2;
 }
 .project {
+  display: flex;
+  align-items: center;
   width: 100%;
-  justify-content: flex-start;
+}
+.project.selected {
+  background: #5b4531;
+}
+.project-open {
+  flex: 1;
+  min-width: 0;
   padding: 10px 8px;
   font-size: 12px;
+}
+.project-add {
+  flex-shrink: 0;
+  padding: 10px 8px;
 }
 .project svg {
   color: #dfb46f;

@@ -130,6 +130,9 @@ function App() {
     [selected, setSelected] = useState<string | null>(null),
     [messages, setMessages] = useState<ChatMessage[]>([]),
     [inputs, setInputs] = useState<Input[]>([]);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const draftKey =
+    selected || (activeProjectId ? `project:${activeProjectId}:new` : null);
   const {
     draft,
     setDraft,
@@ -139,7 +142,7 @@ function App() {
     setAnnotations,
     clearSubmitted,
     restoreDraft,
-  } = useDrafts(selected);
+  } = useDrafts(draftKey);
   const [search, setSearch] = useState(""),
     [settings, setSettings] = useState(false),
     [settingsTab, setSettingsTab] = useState("模型"),
@@ -267,6 +270,9 @@ function App() {
     ...(state?.sessions || []),
     ...(state?.archivedSessions || []),
   ].find((s) => s.id === selected);
+  const project = state?.projects.find(
+    (p) => p.id === (session ? session.projectId : activeProjectId),
+  );
   useEffect(() => {
     const seq = ++statsSequence.current;
     if (!selected) return;
@@ -286,10 +292,27 @@ function App() {
       setError(errorText(e));
     }
   };
-  const newSession = async (projectId?: string) => {
+  const openProject = (projectId: string) => {
+    const sessions =
+      state?.sessions.filter((s) => s.projectId === projectId) || [];
+    const current = sessions.find((s) => s.id === selected);
+    const latest = sessions.reduce<Session | undefined>(
+      (latest, s) => (!latest || s.updatedAt > latest.updatedAt ? s : latest),
+      undefined,
+    );
+    const id = current?.id || latest?.id || null;
+    selectedRef.current = id;
+    setSelected(id);
+    setActiveProjectId(projectId);
+    setShowArchived(false);
+    setSearch("");
+    setMenu(false);
+  };
+  const newSession = async (projectId = activeProjectId || undefined) => {
     const s = await api("/sessions", "POST", { projectId });
     selectedRef.current = s.id;
     setSelected(s.id);
+    setActiveProjectId(projectId || null);
     setState(
       (current) =>
         current && {
@@ -335,7 +358,7 @@ function App() {
       void refresh();
     } catch (e) {
       setOutgoing(null);
-      restoreDraft(id, snapshot);
+      restoreDraft(id || draftKey, snapshot);
       setError(errorText(e));
     } finally {
       sendLock.current = false;
@@ -455,15 +478,28 @@ function App() {
         </div>
         <div className="projects">
           {state?.projects.map((p) => (
-            <button
-              className="project"
+            <div
+              className={`project ${activeProjectId === p.id ? "selected" : ""}`}
               key={p.id}
-              onClick={() => void run(() => newSession(p.id))}
             >
-              <Icon name="folder" size={16} />
-              <span>{p.name}</span>
-              <Icon name="plus" size={14} />
-            </button>
+              <button
+                className="project-open"
+                aria-pressed={activeProjectId === p.id}
+                title={p.path}
+                onClick={() => openProject(p.id)}
+              >
+                <Icon name="folder" size={16} />
+                <span>{p.name}</span>
+              </button>
+              <button
+                className="project-add"
+                aria-label={`在 ${p.name} 中新建会话`}
+                title="新建会话"
+                onClick={() => void run(() => newSession(p.id))}
+              >
+                <Icon name="plus" size={14} />
+              </button>
+            </div>
           ))}
           {!state?.projects.length && (
             <div className="sidebar-hint">添加目录，开始项目工作</div>
@@ -471,14 +507,26 @@ function App() {
         </div>
         <div className="section-label">
           {showArchived ? "已归档" : "会话"}
+          {activeProjectId && (
+            <button
+              onClick={() => {
+                setActiveProjectId(null);
+                setSearch("");
+              }}
+            >
+              全部会话
+            </button>
+          )}
           <button onClick={() => setShowArchived(!showArchived)}>
             {showArchived ? "返回会话" : "查看归档"}
           </button>
         </div>
         <div className="session-list">
           {(showArchived ? state?.archivedSessions : state?.sessions)
-            ?.filter((s) =>
-              s.title.toLowerCase().includes(search.toLowerCase()),
+            ?.filter(
+              (s) =>
+                (!activeProjectId || s.projectId === activeProjectId) &&
+                s.title.toLowerCase().includes(search.toLowerCase()),
             )
             .map((s) => (
               <button
@@ -509,11 +557,7 @@ function App() {
       <main>
         <header className="topbar">
           <div>
-            <span className="breadcrumb">
-              {session?.projectId
-                ? state?.projects.find((p) => p.id === session.projectId)?.name
-                : "工作台"}
-            </span>
+            <span className="breadcrumb">{project?.name || "工作台"}</span>
             <Icon name="chevron" size={13} />
             <strong>{session?.title || "新会话"}</strong>
           </div>
@@ -1020,7 +1064,10 @@ function App() {
           </div>
           <div className="composer-footer">
             <span>
-              {session?.cwd || state?.settings.defaultCwd || "本机工作目录"}
+              {session?.cwd ||
+                project?.path ||
+                state?.settings.defaultCwd ||
+                "本机工作目录"}
             </span>
             <span>
               {usage?.context && (
