@@ -1,5 +1,6 @@
 import {
   cpSync,
+  readFileSync,
   mkdirSync,
   rmSync,
   writeFileSync,
@@ -17,7 +18,7 @@ const label = `${platform === "darwin" ? "macos" : "windows"}-${arch}`,
   destination = join(root, "out", label);
 mkdirSync(destination, { recursive: true });
 const electron = join(root, "node_modules", "electron", "dist");
-const bundle = join(destination, platform === "darwin" ? "bro.app" : "bro");
+const bundle = join(destination, platform === "darwin" ? "Bro.app" : "Bro");
 // Only delete this script's previous generated bundle, never application data.
 rmSync(bundle, { recursive: true, force: true });
 cpSync(
@@ -74,12 +75,12 @@ cpSync(
 );
 writeFileSync(
   join(resources, "BRO-NOTICE.txt"),
-  "bro bundles Electron, Bun, and OMP 18.4.3. Their licenses are included alongside the binaries and packages. This local build is not notarized or signed with a distribution certificate.\n",
+  "Bro bundles Electron, Bun, and OMP 18.4.3. Their licenses are included alongside the binaries and packages. This local build is not notarized or signed with a distribution certificate.\n",
 );
 if (platform === "darwin") {
   renameSync(
     join(bundle, "Contents", "MacOS", "Electron"),
-    join(bundle, "Contents", "MacOS", "bro"),
+    join(bundle, "Contents", "MacOS", "Bro"),
   );
   await run([
     "xcrun",
@@ -88,12 +89,17 @@ if (platform === "darwin") {
     "-o",
     join(app, "packages/platform/input-monitor-macos"),
   ]);
+  cpSync(
+    join(root, "apps/desktop/assets/icon.icns"),
+    join(resources, "Bro.icns"),
+  );
   const plist = join(bundle, "Contents", "Info.plist");
   for (const [key, value] of [
-    ["CFBundleExecutable", "bro"],
-    ["CFBundleDisplayName", "bro"],
-    ["CFBundleName", "bro"],
+    ["CFBundleExecutable", "Bro"],
+    ["CFBundleDisplayName", "Bro"],
+    ["CFBundleName", "Bro"],
     ["CFBundleIdentifier", "io.donmagelas.bro"],
+    ["CFBundleIconFile", "Bro.icns"],
     ["CFBundleShortVersionString", "0.1.0"],
     ["CFBundleVersion", "1"],
   ])
@@ -108,6 +114,7 @@ if (platform === "darwin") {
     join(root, "packaging", "entitlements.mac.plist"),
     bundle,
   ]);
+  rmSync(join(destination, "Bro-macos.zip"), { force: true });
   await run([
     "ditto",
     "-c",
@@ -115,11 +122,43 @@ if (platform === "darwin") {
     "--sequesterRsrc",
     "--keepParent",
     bundle,
-    join(destination, "bro-macos.zip"),
+    join(destination, "Bro-macos.zip"),
   ]);
 } else {
-  renameSync(join(bundle, "electron.exe"), join(bundle, "bro.exe"));
-  const archive = join(destination, "bro-windows.zip");
+  // Embed the icon and product name in the executable, including Explorer's
+  // file properties. A BrowserWindow icon alone leaves Electron's EXE icon.
+  const { NtExecutable, NtExecutableResource, Resource, Data } = await import(
+    "resedit"
+  );
+  const exe = NtExecutable.from(readFileSync(join(bundle, "electron.exe")), {
+    ignoreCert: true,
+  });
+  const res = NtExecutableResource.from(exe);
+  const icons = Data.IconFile.from(
+    readFileSync(join(root, "apps/desktop/assets/icon.ico")),
+  ).icons.map((item) => item.data);
+  const groups = Resource.IconGroupEntry.fromEntries(res.entries);
+  for (const group of groups.length ? groups : [{ id: 1, lang: 1033 }])
+    Resource.IconGroupEntry.replaceIconsForResource(
+      res.entries,
+      group.id,
+      group.lang,
+      icons,
+    );
+  for (const version of Resource.VersionInfo.fromEntries(res.entries)) {
+    for (const language of version.getAllLanguagesForStringValues())
+      version.setStringValues(language, {
+        ProductName: "Bro",
+        FileDescription: "Bro",
+        InternalName: "Bro",
+        OriginalFilename: "Bro.exe",
+      });
+    version.outputToResourceEntries(res.entries);
+  }
+  res.outputResource(exe);
+  writeFileSync(join(bundle, "Bro.exe"), Buffer.from(exe.generate()));
+  rmSync(join(bundle, "electron.exe"));
+  const archive = join(destination, "Bro-windows.zip");
   rmSync(archive, { force: true });
   // Pass paths through environment variables, not interpolated PowerShell code.
   const child = Bun.spawn(

@@ -30,6 +30,7 @@ declare global {
     };
   }
 }
+const brandIcon = new URL("../../assets/icon.png", import.meta.url).href;
 const api = (path: string, method = "GET", body?: unknown) =>
   window.bro.request(path, method, body);
 const labels: Record<string, string> = {
@@ -161,7 +162,12 @@ function App() {
     try {
       const seq = ++stateSequence.current;
       const result = await api("/state");
-      if (seq === stateSequence.current) setState(result);
+      if (seq === stateSequence.current) {
+        setState(result);
+        setError((current) =>
+          current === "后台连接正在恢复…" ? "" : current,
+        );
+      }
     } catch (e) {
       setError(String(e));
     }
@@ -353,10 +359,10 @@ function App() {
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-mark">
-            <PixelIcon kind="cactus" />
+            <img src={brandIcon} alt="" />
           </span>
           <strong>
-            bro<span className="brand-sub">YOUR TRUSTY SIDEKICK</span>
+            Bro<span className="brand-sub">YOUR TRUSTY SIDEKICK</span>
           </strong>
           <span className="local-label">本机</span>
         </div>
@@ -579,7 +585,7 @@ function App() {
                 <div className="welcome-copy">
                   <div className="eyebrow">A LITTLE GRIT. A BIG IDEA.</div>
                   <h1>
-                    搭档，今天做点什么？<span className="pixel-cursor">_</span>
+                    大哥，今天砍谁？<span className="pixel-cursor">_</span>
                   </h1>
                   <p>你的本机搭档已就位。写代码、找答案，让想法变成现实。</p>
                 </div>
@@ -651,7 +657,7 @@ function App() {
                   ) : (
                     <>
                       <div className="message-author">
-                        {m.role === "user" ? "你" : "bro"}
+                        {m.role === "user" ? "你" : "Bro"}
                       </div>
                       {Array.isArray(m.content) &&
                         m.content
@@ -725,7 +731,7 @@ function App() {
               ))}
             {live && (
               <article className="message assistant">
-                <div className="message-author">bro</div>
+                <div className="message-author">Bro</div>
                 <div className="markdown">
                   <Markdown>{live}</Markdown>
                 </div>
@@ -767,10 +773,10 @@ function App() {
                 <div className="running-tool">
                   <span className="spinner" />
                   {session?.status === "starting"
-                    ? "正在唤醒 bro…"
+                    ? "正在唤醒 Bro…"
                     : session?.status === "waiting"
                       ? "等待工作目录可用…"
-                      : "bro 正在处理…"}
+                      : "Bro 正在处理…"}
                 </div>
               )}
             {session?.error && (
@@ -829,7 +835,7 @@ function App() {
             </div>
             <textarea
               aria-label="消息"
-              placeholder="交给 bro 一件事…"
+              placeholder="交给 Bro 一件事…"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
@@ -1522,7 +1528,7 @@ function SettingsPanel({
                 <hr />
                 <h3>受信任的人</h3>
                 <p className="description">
-                  首次填写你自己的 open_id。每行一个；名单内均可完整使用 bro。
+                  首次填写你自己的 open_id。每行一个；名单内均可完整使用 Bro。
                 </p>
                 <textarea
                   className="settings-textarea"
@@ -1674,7 +1680,7 @@ function SettingsPanel({
                   {subscription.kind === "peer" && (
                     <>
                       <Field
-                        label="bro 的 Peer 身份"
+                        label="Bro 的 Peer 身份"
                         value={subscription.me}
                         onChange={(v) =>
                           setSubscription((s) => ({ ...s, me: v }))

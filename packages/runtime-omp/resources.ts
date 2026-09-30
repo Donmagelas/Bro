@@ -89,7 +89,7 @@ export async function loadResources(
   const customToolPaths = plugins.flatMap((p) =>
     resolvePluginToolPaths(p).map((path: string) => ({
       path,
-      source: { provider: "bro", providerName: "bro", level: "user" },
+      source: { provider: "bro", providerName: "Bro", level: "user" },
     })),
   );
   const configs = Object.fromEntries(

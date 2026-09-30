@@ -9,7 +9,7 @@ const {
 const { join, resolve, dirname, delimiter } = require("node:path");
 const fs = require("node:fs");
 const { spawn } = require("node:child_process");
-app.setName("bro");
+app.setName("Bro");
 let window, info, streamController, connecting;
 const root =
   process.env.BRO_DATA_DIR ||
@@ -205,10 +205,14 @@ app
       app.quit();
       return;
     }
+    app.setAboutPanelOptions({
+      applicationName: "Bro",
+      iconPath: join(__dirname, "assets/icon.png"),
+    });
     Menu.setApplicationMenu(
       Menu.buildFromTemplate([
         {
-          label: "bro",
+          label: "Bro",
           submenu: [{ role: "about" }, { type: "separator" }, { role: "quit" }],
         },
         { role: "editMenu" },
@@ -221,8 +225,13 @@ app
       height: 840,
       minWidth: 800,
       minHeight: 600,
-      title: "bro",
-      backgroundColor: "#f7f7f5",
+      title: "Bro",
+      backgroundColor: "#f4e9d7",
+      icon: join(
+        __dirname,
+        "assets",
+        process.platform === "win32" ? "icon.ico" : "icon.png",
+      ),
       titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
       trafficLightPosition: { x: 18, y: 19 },
       webPreferences: {
@@ -246,7 +255,7 @@ app
     void subscribe();
   })
   .catch((error) => {
-    dialog.showErrorBox("bro 启动失败", String(error));
+    dialog.showErrorBox("Bro 启动失败", String(error));
     app.quit();
   });
 app.on("window-all-closed", () => app.quit());

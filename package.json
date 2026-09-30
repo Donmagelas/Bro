@@ -41,7 +41,9 @@
     "electron": "44.4.5",
     "prettier": "3.6.2",
     "puppeteer-core": "25.3.0",
+    "resedit": "3.1.0",
     "typescript": "5.9.3",
     "vite": "8.3.1"
-  }
+  },
+  "productName": "Bro"
 }

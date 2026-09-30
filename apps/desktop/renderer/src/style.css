@@ -16,6 +16,7 @@
   background: #f4e9d7;
   font-synthesis: none;
   --ink: #49382b;
+  --sidebar: #423128;
   --muted: #957d63;
   --paper: #f4e9d7;
   --line: #dbccb6;
@@ -107,7 +108,7 @@ svg {
 .sidebar {
   width: 242px;
   flex-shrink: 0;
-  background: #423128;
+  background: var(--sidebar);
   color: #f3e3c7;
   padding: 52px 14px 14px;
   display: flex;
@@ -142,11 +143,13 @@ svg {
   color: var(--lime);
   display: grid;
   place-items: center;
-  filter: drop-shadow(3px 3px #2e231b);
+  flex-shrink: 0;
 }
-.brand-mark svg {
-  width: 35px;
-  height: 35px;
+.brand-mark img {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  image-rendering: pixelated;
 }
 .local-label {
   margin-left: auto;
@@ -388,7 +391,7 @@ svg {
 .welcome-art {
   height: 210px;
   position: relative;
-  background: #423128;
+  background: var(--sidebar);
   border: 3px solid var(--ink);
   box-shadow: 5px 5px #dec4a0;
   overflow: hidden;
