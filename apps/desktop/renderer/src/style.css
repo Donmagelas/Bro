@@ -210,23 +210,23 @@ svg {
   align-items: center;
   width: 100%;
 }
-.project.selected {
-  background: #5b4531;
-}
 .project-open {
   flex: 1;
   min-width: 0;
-  padding: 10px 8px;
+  justify-content: flex-start;
+  gap: 5px;
+  padding: 9px 2px;
   font-size: 12px;
 }
 .project-add {
   flex-shrink: 0;
-  padding: 10px 8px;
+  padding: 7px 3px;
+  min-height: 28px;
 }
 .project svg {
   color: #dfb46f;
 }
-.project span {
+.project-name {
   flex: 1;
   text-align: left;
   overflow: hidden;
@@ -239,25 +239,70 @@ svg {
   font-size: 11px;
   line-height: 1.7;
 }
-.session-list {
+.sidebar-tree {
   overflow: auto;
   flex: 1;
-  min-height: 40px;
+  min-height: 0;
+  padding-bottom: 12px;
+}
+.project-chevron {
+  display: flex;
+  flex: 0 0 13px;
+}
+.project-chevron.expanded {
+  transform: rotate(90deg);
+}
+.project-sessions {
+  margin-left: 11px;
+  padding-left: 5px;
+  border-left: 1px solid #68533d;
+}
+.session-row {
+  display: flex;
+  align-items: center;
+  margin: 2px 0;
+  border-left: 3px solid transparent;
+}
+.row-menu {
+  flex-shrink: 0;
+  min-height: 28px;
+  padding: 7px 3px;
+  color: #cdb38f;
+}
+.archive-nav {
+  width: 100%;
+  justify-content: flex-start;
+  padding: 10px;
+  color: #d8c6aa;
+  font-size: 12px;
+  border-top: 1px solid #68533d;
+}
+.tree-menu.popover {
+  position: fixed;
+  width: 195px;
+  right: auto;
+  z-index: 25;
+  color: var(--ink);
+}
+.sidebar .tree-menu button:hover {
+  background: #eedcbf;
 }
 .session-item {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   text-align: left;
   justify-content: flex-start;
-  padding: 11px 9px;
-  margin: 2px 0;
+  padding: 10px 6px;
   font-size: 12px;
-  border-left: 3px solid transparent;
   color: #d8c6aa;
 }
-.session-item.selected {
+.session-row.selected {
   background: #685036;
   border-left-color: var(--lime);
   color: #f8eacb;
+}
+.session-row.selected .session-item {
+  color: inherit;
 }
 .session-name {
   overflow: hidden;

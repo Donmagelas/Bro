@@ -346,6 +346,30 @@ export function createHost(
           changed();
           return json(result);
         }
+        const projectMatch = path.match(/^\/projects\/([^/]+)$/);
+        if (projectMatch) {
+          const id = decodeURIComponent(projectMatch[1]!);
+          if (!store.projects().some((p) => p.id === id))
+            return json({ error: "项目不存在" }, 404);
+          if (method === "PATCH") {
+            const b = await body(request);
+            if (b.archived !== undefined && typeof b.archived !== "boolean")
+              throw new Error("归档状态需要布尔值");
+            store.updateProject(id, {
+              name:
+                b.name === undefined ? undefined : str(b.name, "项目名称", 200),
+              archived: b.archived,
+            });
+            changed();
+            return json(store.projects().find((p) => p.id === id));
+          }
+          if (method === "DELETE") {
+            store.deleteProject(id);
+            await runtimes.refresh();
+            changed();
+            return json({ ok: true });
+          }
+        }
         if (path === "/sessions" && method === "POST") {
           const b = await body(request);
           const project = b.projectId

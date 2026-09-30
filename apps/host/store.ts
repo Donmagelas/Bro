@@ -7,6 +7,7 @@ import type {
   Input,
   InputStatus,
   Project,
+  Resource,
   Session,
   Settings,
   Source,
@@ -44,6 +45,13 @@ export class Store {
     const columns = this.db.query("PRAGMA table_info(sessions)").all() as Row[];
     if (!columns.some((column) => column.name === "model"))
       this.db.exec("ALTER TABLE sessions ADD COLUMN model TEXT");
+    const projectColumns = this.db
+      .query("PRAGMA table_info(projects)")
+      .all() as Row[];
+    if (!projectColumns.some((column) => column.name === "archived"))
+      this.db.exec(
+        "ALTER TABLE projects ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
+      );
   }
   getSettings(): Settings {
     return this.getConfig("settings", {
@@ -76,20 +84,61 @@ export class Store {
       .run(key, JSON.stringify(value));
   }
   projects(): Project[] {
-    return this.db
-      .query("SELECT * FROM projects ORDER BY name")
-      .all() as Project[];
+    return (
+      this.db.query("SELECT * FROM projects ORDER BY name").all() as Row[]
+    ).map((p) => ({ ...p, archived: !!p.archived }) as Project);
   }
   addProject(name: string, path: string): Project {
     const old = this.db
       .query("SELECT * FROM projects WHERE path=?")
       .get(path) as Project | null;
-    if (old) return old;
-    const project = { id: randomUUID(), name, path };
+    if (old) {
+      this.updateProject(old.id, { archived: false });
+      return { ...old, archived: false };
+    }
+    const project = { id: randomUUID(), name, path, archived: false };
     this.db
-      .query("INSERT INTO projects VALUES (?,?,?)")
+      .query("INSERT INTO projects (id,name,path) VALUES (?,?,?)")
       .run(project.id, name, path);
     return project;
+  }
+  updateProject(
+    id: string,
+    values: Partial<Pick<Project, "name" | "archived">>,
+  ) {
+    if (!this.projects().some((p) => p.id === id))
+      throw new Error("项目不存在");
+    this.db.transaction(() => {
+      if (values.name !== undefined)
+        this.db
+          .query("UPDATE projects SET name=? WHERE id=?")
+          .run(values.name, id);
+      if (values.archived !== undefined)
+        this.db
+          .query("UPDATE projects SET archived=? WHERE id=?")
+          .run(Number(values.archived), id);
+    })();
+  }
+  deleteProject(id: string) {
+    if (!this.projects().some((p) => p.id === id))
+      throw new Error("项目不存在");
+    this.db.transaction(() => {
+      // Removing a sidebar group must not change existing memory scope or cwd.
+      for (const session of this.sessions(true).filter(
+        (s) => s.projectId === id,
+      ))
+        this.memoryScope(session.id);
+      this.db
+        .query("UPDATE sessions SET projectId=NULL WHERE projectId=?")
+        .run(id);
+      this.db.query("DELETE FROM projects WHERE id=?").run(id);
+      this.setConfig(
+        "resources",
+        this.getConfig<Resource[]>("resources", []).filter(
+          (r) => r.projectId !== id,
+        ),
+      );
+    })();
   }
   connections(): Connection[] {
     return (this.db.query("SELECT * FROM connections").all() as Row[]).map(

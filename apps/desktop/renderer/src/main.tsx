@@ -9,6 +9,7 @@ import type {
   HostState,
   Input,
   ModelChoice,
+  Project,
   Session,
   Thinking,
 } from "../../../../packages/contracts";
@@ -153,6 +154,12 @@ function App() {
     [tool, setTool] = useState(""),
     [menu, setMenu] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [confirmation, setConfirmation] = useState<{
+    title: string;
+    detail: string;
+    action: () => Promise<void>;
+  } | null>(null);
+  const [confirming, setConfirming] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [outgoing, setOutgoing] = useState<{
     id: string;
@@ -292,23 +299,11 @@ function App() {
       setError(errorText(e));
     }
   };
-  const openProject = (projectId: string) => {
-    const sessions =
-      state?.sessions.filter((s) => s.projectId === projectId) || [];
-    const current = sessions.find((s) => s.id === selected);
-    const latest = sessions.reduce<Session | undefined>(
-      (latest, s) => (!latest || s.updatedAt > latest.updatedAt ? s : latest),
-      undefined,
-    );
-    const id = current?.id || latest?.id || null;
-    selectedRef.current = id;
-    setSelected(id);
-    setActiveProjectId(projectId);
-    setShowArchived(false);
-    setSearch("");
-    setMenu(false);
-  };
-  const newSession = async (projectId = activeProjectId || undefined) => {
+  const newSession = async (
+    projectId = state?.projects.find(
+      (p) => p.id === activeProjectId && !p.archived,
+    )?.id,
+  ) => {
     const s = await api("/sessions", "POST", { projectId });
     selectedRef.current = s.id;
     setSelected(s.id);
@@ -377,13 +372,12 @@ function App() {
         setDiff(null);
         setSettings(false);
         setMenu(false);
+        if (!confirming) setConfirmation(null);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
-  const patch = (values: unknown) =>
-    run(() => api(`/sessions/${selected}`, "PATCH", values));
   const activeConnection = state?.connections.find(
     (c) =>
       c.id === (session?.connectionId || state?.settings.defaultConnectionId),
@@ -418,6 +412,71 @@ function App() {
       setSavingModel(false);
     }
   };
+  function sessionAction(target: Session, action: string) {
+    setMenu(false);
+    setError("");
+    if (action === "rename") {
+      setQuestion({
+        title: "会话名称",
+        value: target.title,
+        submit: (title) =>
+          void run(() => api(`/sessions/${target.id}`, "PATCH", { title })),
+      });
+    } else if (action === "pin") {
+      void run(() =>
+        api(`/sessions/${target.id}`, "PATCH", { pinned: !target.pinned }),
+      );
+    } else if (action === "archive") {
+      void run(async () => {
+        await api(`/sessions/${target.id}`, "PATCH", {
+          archived: !target.archived,
+        });
+        if (selectedRef.current === target.id && !target.archived) {
+          selectedRef.current = null;
+          setSelected(null);
+        }
+      });
+    } else if (action === "delete") {
+      setConfirmation({
+        title: `删除会话“${target.title}”？`,
+        detail: "会话将从 Bro 中删除，无法恢复。本机项目文件不会删除。",
+        action: async () => {
+          await api(`/sessions/${target.id}`, "DELETE");
+          if (selectedRef.current === target.id) {
+            selectedRef.current = null;
+            setSelected(null);
+          }
+        },
+      });
+    }
+  }
+  function projectAction(target: Project, action: string) {
+    setError("");
+    if (action === "rename") {
+      setQuestion({
+        title: "项目名称",
+        value: target.name,
+        submit: (name) =>
+          void run(() => api(`/projects/${target.id}`, "PATCH", { name })),
+      });
+    } else if (action === "archive") {
+      void run(() =>
+        api(`/projects/${target.id}`, "PATCH", { archived: !target.archived }),
+      );
+    } else if (action === "delete") {
+      setConfirmation({
+        title: `移除项目“${target.name}”？`,
+        detail:
+          "只移除 Bro 中的项目分组和项目专属资源配置，会话保留到其他会话，本机目录与文件保留。",
+        action: async () => {
+          await api(`/projects/${target.id}`, "DELETE");
+          setActiveProjectId((current) =>
+            current === target.id ? null : current,
+          );
+        },
+      });
+    }
+  }
   function annotate(message: ChatMessage) {
     const selection = window.getSelection();
     const quote = selection?.toString().trim();
@@ -462,86 +521,34 @@ function App() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </label>
-        <div className="section-label">
-          项目
-          <button
-            aria-label="添加项目"
-            onClick={() =>
-              void run(async () => {
-                const path = await window.bro.directory();
-                if (path) await api("/projects", "POST", { path });
-              })
-            }
-          >
-            <Icon name="plus" size={15} />
-          </button>
-        </div>
-        <div className="projects">
-          {state?.projects.map((p) => (
-            <div
-              className={`project ${activeProjectId === p.id ? "selected" : ""}`}
-              key={p.id}
-            >
-              <button
-                className="project-open"
-                aria-pressed={activeProjectId === p.id}
-                title={p.path}
-                onClick={() => openProject(p.id)}
-              >
-                <Icon name="folder" size={16} />
-                <span>{p.name}</span>
-              </button>
-              <button
-                className="project-add"
-                aria-label={`在 ${p.name} 中新建会话`}
-                title="新建会话"
-                onClick={() => void run(() => newSession(p.id))}
-              >
-                <Icon name="plus" size={14} />
-              </button>
-            </div>
-          ))}
-          {!state?.projects.length && (
-            <div className="sidebar-hint">添加目录，开始项目工作</div>
-          )}
-        </div>
-        <div className="section-label">
-          {showArchived ? "已归档" : "会话"}
-          {activeProjectId && (
-            <button
-              onClick={() => {
-                setActiveProjectId(null);
-                setSearch("");
-              }}
-            >
-              全部会话
-            </button>
-          )}
-          <button onClick={() => setShowArchived(!showArchived)}>
-            {showArchived ? "返回会话" : "查看归档"}
-          </button>
-        </div>
-        <div className="session-list">
-          {(showArchived ? state?.archivedSessions : state?.sessions)
-            ?.filter(
-              (s) =>
-                (!activeProjectId || s.projectId === activeProjectId) &&
-                s.title.toLowerCase().includes(search.toLowerCase()),
-            )
-            .map((s) => (
-              <button
-                key={s.id}
-                data-session-id={s.id}
-                className={`session-item ${s.id === selected ? "selected" : ""}`}
-                onClick={() => setSelected(s.id)}
-              >
-                <span className={`status-dot ${s.status}`} />
-                <span className="session-name">{s.title}</span>
-                {s.pinned && <Icon name="pin" size={12} />}{" "}
-                {!!s.queued && <span className="count">{s.queued}</span>}
-              </button>
-            ))}
-        </div>
+        <SidebarTree
+          projects={state?.projects || []}
+          sessions={[
+            ...(state?.sessions || []),
+            ...(state?.archivedSessions || []),
+          ]}
+          selected={selected}
+          search={search}
+          archived={showArchived}
+          onArchiveView={() => {
+            setShowArchived(!showArchived);
+            setSearch("");
+          }}
+          onSelect={(s) => {
+            selectedRef.current = s.id;
+            setSelected(s.id);
+            setActiveProjectId(s.projectId);
+          }}
+          onNew={(id) => void run(() => newSession(id))}
+          onAdd={() =>
+            void run(async () => {
+              const path = await window.bro.directory();
+              if (path) await api("/projects", "POST", { path });
+            })
+          }
+          onSessionAction={sessionAction}
+          onProjectAction={projectAction}
+        />
         <div className="sidebar-bottom">
           <div className="host-status">
             <span className={`status-dot ${state ? "idle" : "error"}`} />
@@ -597,19 +604,10 @@ function App() {
                 >
                   查看改动
                 </button>
-                <button
-                  onClick={() => {
-                    setQuestion({
-                      title: "会话名称",
-                      value: session.title,
-                      submit: (title) => void patch({ title }),
-                    });
-                    setMenu(false);
-                  }}
-                >
+                <button onClick={() => sessionAction(session, "rename")}>
                   重命名
                 </button>
-                <button onClick={() => void patch({ pinned: !session.pinned })}>
+                <button onClick={() => sessionAction(session, "pin")}>
                   {session.pinned ? "取消置顶" : "置顶"}
                 </button>
                 <button
@@ -627,31 +625,14 @@ function App() {
                 >
                   创建分支
                 </button>
-                <button
-                  onClick={() =>
-                    void run(async () => {
-                      await api(`/sessions/${selected}`, "PATCH", {
-                        archived: !session.archived,
-                      });
-                      setMenu(false);
-                      if (session.archived) setShowArchived(false);
-                      else setSelected(null);
-                    })
-                  }
-                >
-                  {session.archived ? "恢复会话" : "归档"}
+                <button onClick={() => sessionAction(session, "archive")}>
+                  {session.archived ? "恢复会话" : "归档会话"}
                 </button>
                 <button
                   className="danger"
-                  onClick={() => {
-                    if (window.confirm("删除此会话？"))
-                      void run(async () => {
-                        await api(`/sessions/${selected}`, "DELETE");
-                        setSelected(null);
-                      });
-                  }}
+                  onClick={() => sessionAction(session, "delete")}
                 >
-                  删除
+                  删除会话
                 </button>
               </div>
             )}
@@ -1119,6 +1100,48 @@ function App() {
           </section>
         </div>
       )}
+      {confirmation && (
+        <div className="modal-backdrop">
+          <section
+            className="question-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirmation-title"
+          >
+            <h3 id="confirmation-title">{confirmation.title}</h3>
+            <p>{confirmation.detail}</p>
+            {error && (
+              <p className="danger" role="alert">
+                {error}
+              </p>
+            )}
+            <div>
+              <button
+                autoFocus
+                className="secondary"
+                disabled={confirming}
+                onClick={() => setConfirmation(null)}
+              >
+                取消
+              </button>
+              <button
+                className="primary danger"
+                disabled={confirming}
+                onClick={() => {
+                  if (confirming) return;
+                  setConfirming(true);
+                  void run(async () => {
+                    await confirmation.action();
+                    setConfirmation(null);
+                  }).finally(() => setConfirming(false));
+                }}
+              >
+                {confirming ? "处理中…" : "确认"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {question && (
         <div className="modal-backdrop">
           <form
@@ -1155,6 +1178,331 @@ function App() {
         </div>
       )}
     </div>
+  );
+}
+
+function SidebarTree({
+  projects,
+  sessions,
+  selected,
+  search,
+  archived,
+  onArchiveView,
+  onSelect,
+  onNew,
+  onAdd,
+  onSessionAction,
+  onProjectAction,
+}: {
+  projects: Project[];
+  sessions: Session[];
+  selected: string | null;
+  search: string;
+  archived: boolean;
+  onArchiveView: () => void;
+  onSelect: (session: Session) => void;
+  onNew: (projectId?: string) => void;
+  onAdd: () => void;
+  onSessionAction: (session: Session, action: string) => void;
+  onProjectAction: (project: Project, action: string) => void;
+}) {
+  const [collapsed, setCollapsed] = useState<string[]>(() => {
+    try {
+      const value = JSON.parse(
+        localStorage.getItem("bro.sidebar.collapsed.v1") || "[]",
+      );
+      return Array.isArray(value) ? value : [];
+    } catch {
+      return [];
+    }
+  });
+  const [context, setContext] = useState<{
+    kind: "session" | "project";
+    id: string;
+    x: number;
+    y: number;
+    trigger: HTMLElement;
+  } | null>(null);
+  const contextRef = useRef<HTMLDivElement>(null);
+  const toggle = (id: string) =>
+    setCollapsed((old) => {
+      const next = old.includes(id)
+        ? old.filter((value) => value !== id)
+        : [...old, id];
+      try {
+        localStorage.setItem("bro.sidebar.collapsed.v1", JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  useEffect(() => {
+    const p = sessions.find((s) => s.id === selected)?.projectId;
+    if (p) setCollapsed((old) => old.filter((id) => id !== p));
+  }, [selected]);
+  useEffect(() => {
+    if (!context) return;
+    contextRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    const close = (event: PointerEvent) => {
+      if (!contextRef.current?.contains(event.target as Node)) setContext(null);
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setContext(null);
+        context.trigger.focus();
+      }
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", key);
+    };
+  }, [context]);
+  useEffect(() => setContext(null), [archived, search]);
+  const openMenu = (
+    event: React.MouseEvent<HTMLElement>,
+    kind: "project" | "session",
+    id: string,
+  ) => {
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = event.type === "contextmenu" ? event.clientX : rect.right;
+    const y = event.type === "contextmenu" ? event.clientY : rect.top;
+    setContext({
+      kind,
+      id,
+      x: Math.min(x, window.innerWidth - 210),
+      y: Math.min(y, window.innerHeight - 210),
+      trigger: event.currentTarget,
+    });
+  };
+  const byId = new Map(projects.map((p) => [p.id, p]));
+  const query = search.trim().toLocaleLowerCase();
+  const matches = (s: Session) =>
+    s.title.toLocaleLowerCase().includes(query) ||
+    !!byId
+      .get(s.projectId || "")
+      ?.name.toLocaleLowerCase()
+      .includes(query);
+  const visible = sessions.filter(
+    (s) =>
+      (archived
+        ? s.archived || !!byId.get(s.projectId || "")?.archived
+        : !s.archived && !byId.get(s.projectId || "")?.archived) && matches(s),
+  );
+  const pinned = archived ? [] : visible.filter((s) => s.pinned);
+  const rows = visible.filter((s) => archived || !s.pinned);
+  const ungrouped = rows.filter((s) => !s.projectId || !byId.has(s.projectId));
+  const visibleProjects = projects.filter(
+    (p) =>
+      (archived
+        ? p.archived || rows.some((s) => s.projectId === p.id)
+        : !p.archived) &&
+      (!query ||
+        p.name.toLocaleLowerCase().includes(query) ||
+        rows.some((s) => s.projectId === p.id)),
+  );
+  function sessionRow(s: Session) {
+    return (
+      <div
+        className={`session-row ${s.id === selected ? "selected" : ""}`}
+        key={s.id}
+        onContextMenu={(e) => openMenu(e, "session", s.id)}
+      >
+        <button
+          className="session-item"
+          data-session-id={s.id}
+          title={s.title}
+          aria-current={s.id === selected ? "page" : undefined}
+          onClick={() => onSelect(s)}
+        >
+          <span className={`status-dot ${s.status}`} />
+          <span className="session-name">{s.title}</span>
+          {!!s.queued && <span className="count">{s.queued}</span>}
+        </button>
+        <button
+          className="row-menu"
+          aria-label={`会话 ${s.title} 的操作`}
+          title="会话操作"
+          aria-haspopup="menu"
+          aria-expanded={context?.kind === "session" && context.id === s.id}
+          onClick={(e) => openMenu(e, "session", s.id)}
+        >
+          <Icon name="more" size={16} />
+        </button>
+      </div>
+    );
+  }
+  const menuSession =
+    context?.kind === "session"
+      ? sessions.find((s) => s.id === context.id)
+      : undefined;
+  const menuProject =
+    context?.kind === "project" ? byId.get(context.id) : undefined;
+  function action(name: string) {
+    setContext(null);
+    if (menuSession) onSessionAction(menuSession, name);
+    if (menuProject) onProjectAction(menuProject, name);
+  }
+  return (
+    <>
+      <div className="sidebar-tree" onScroll={() => setContext(null)}>
+        {archived && <div className="section-label">已归档</div>}
+        {!!pinned.length && (
+          <section aria-label="置顶会话">
+            <div className="section-label">置顶</div>
+            {pinned.map(sessionRow)}
+          </section>
+        )}
+        <div className="section-label">
+          项目
+          {!archived && (
+            <button aria-label="添加项目" onClick={onAdd}>
+              <Icon name="plus" size={15} />
+            </button>
+          )}
+        </div>
+        {visibleProjects.map((p) => {
+          const children = rows.filter((s) => s.projectId === p.id);
+          const expanded = !!query || !collapsed.includes(p.id);
+          return (
+            <section
+              className="project-group"
+              key={p.id}
+              aria-label={`项目 ${p.name}`}
+            >
+              <div
+                className="project"
+                onContextMenu={(e) => openMenu(e, "project", p.id)}
+              >
+                <button
+                  className="project-open"
+                  aria-expanded={expanded}
+                  title={p.path}
+                  onClick={() => toggle(p.id)}
+                >
+                  <span
+                    className={`project-chevron ${expanded ? "expanded" : ""}`}
+                  >
+                    <Icon name="chevron" size={13} />
+                  </span>
+                  <Icon name="folder" size={15} />
+                  <span className="project-name">{p.name}</span>
+                </button>
+                {!archived && (
+                  <button
+                    className="project-add"
+                    aria-label={`在 ${p.name} 中新建会话`}
+                    title="新建会话"
+                    onClick={() => onNew(p.id)}
+                  >
+                    <Icon name="plus" size={15} />
+                  </button>
+                )}
+                <button
+                  className="row-menu"
+                  aria-label={`项目 ${p.name} 的操作`}
+                  title="项目操作"
+                  aria-haspopup="menu"
+                  aria-expanded={
+                    context?.kind === "project" && context.id === p.id
+                  }
+                  onClick={(e) => openMenu(e, "project", p.id)}
+                >
+                  <Icon name="more" size={16} />
+                </button>
+              </div>
+              {expanded && (
+                <div className="project-sessions">
+                  {children.map(sessionRow)}
+                  {!children.length && (
+                    <div className="sidebar-hint">
+                      {pinned.some((s) => s.projectId === p.id)
+                        ? "会话已置顶"
+                        : "暂无会话"}
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+          );
+        })}
+        {!!ungrouped.length && (
+          <section aria-label="其他会话">
+            <div className="section-label">其他会话</div>
+            {ungrouped.map(sessionRow)}
+          </section>
+        )}
+        {!visible.length && !visibleProjects.length && (
+          <div className="sidebar-hint">
+            {query
+              ? "没有匹配的项目或会话"
+              : archived
+                ? "暂无归档"
+                : "暂无会话"}
+          </div>
+        )}
+      </div>
+      <button className="archive-nav" onClick={onArchiveView}>
+        {archived ? "返回会话" : "已归档"}
+      </button>
+      {context && (menuSession || menuProject) && (
+        <div
+          className="popover tree-menu"
+          role="menu"
+          aria-label={menuSession ? "会话操作菜单" : "项目操作菜单"}
+          ref={contextRef}
+          style={{ left: context.x, top: context.y }}
+          onKeyDown={(event) => {
+            if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key))
+              return;
+            event.preventDefault();
+            const items = Array.from(
+              contextRef.current?.querySelectorAll<HTMLButtonElement>(
+                "button",
+              ) || [],
+            );
+            const index = items.indexOf(
+              document.activeElement as HTMLButtonElement,
+            );
+            const next =
+              event.key === "Home"
+                ? 0
+                : event.key === "End"
+                  ? items.length - 1
+                  : (index +
+                      (event.key === "ArrowDown" ? 1 : -1) +
+                      items.length) %
+                    items.length;
+            items[next]?.focus();
+          }}
+        >
+          <button role="menuitem" onClick={() => action("rename")}>
+            重命名
+          </button>
+          {menuSession && (
+            <button role="menuitem" onClick={() => action("pin")}>
+              {menuSession.pinned ? "取消置顶" : "置顶"}
+            </button>
+          )}
+          <button role="menuitem" onClick={() => action("archive")}>
+            {menuSession
+              ? menuSession.archived
+                ? "恢复会话"
+                : "归档会话"
+              : menuProject?.archived
+                ? "恢复项目"
+                : "归档项目"}
+          </button>
+          <button
+            role="menuitem"
+            className="danger"
+            onClick={() => action("delete")}
+          >
+            {menuSession ? "删除会话" : "移除项目"}
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 

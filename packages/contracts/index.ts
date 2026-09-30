@@ -84,6 +84,7 @@ export interface Project {
   id: string;
   name: string;
   path: string;
+  archived: boolean;
 }
 export interface Input {
   id: string;

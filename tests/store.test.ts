@@ -194,3 +194,55 @@ test("legacy sessions gain a model column without losing history or inheriting a
     upgraded.close();
   }
 });
+
+test("project migration, archive and removal preserve conversations, files and memory scope", () => {
+  const store = setup();
+  const project = store.addProject("Project", join(store.root, "workspace"));
+  const session = store.createSession({
+    projectId: project.id,
+    cwd: project.path,
+  });
+  const input = store.enqueue(session.id, "Keep this history", { kind: "gui" });
+  const memoryScope = store.memoryScope(session.id);
+  store.setConfig("resources", [
+    { id: "project-skill", projectId: project.id },
+    { id: "global-skill", projectId: null },
+  ]);
+  store.updateProject(project.id, { archived: true, name: "Renamed" });
+  expect(store.projects()[0]).toMatchObject({
+    archived: true,
+    name: "Renamed",
+  });
+  expect(store.session(session.id)?.archived).toBe(false);
+  store.close();
+  const reopened = new Store(store.root);
+  stores[stores.indexOf(store)] = reopened;
+  expect(reopened.projects()[0]?.archived).toBe(true);
+  expect(reopened.addProject("Project", project.path)).toMatchObject({
+    id: project.id,
+    archived: false,
+    name: "Renamed",
+  });
+  reopened.deleteProject(project.id);
+  expect(reopened.projects()).toHaveLength(0);
+  expect(reopened.session(session.id)).toMatchObject({
+    projectId: null,
+    cwd: project.path,
+  });
+  expect(reopened.input(input.id)?.text).toBe("Keep this history");
+  expect(reopened.memoryScope(session.id)).toBe(memoryScope);
+  expect(
+    reopened.getConfig<{ id: string; projectId: string | null }[]>(
+      "resources",
+      [],
+    ),
+  ).toEqual([{ id: "global-skill", projectId: null }]);
+  reopened.db.exec("ALTER TABLE projects DROP COLUMN archived");
+  reopened.close();
+  const migrated = new Store(reopened.root);
+  stores[stores.indexOf(reopened)] = migrated;
+  expect(migrated.addProject("Legacy compatible", project.path).archived).toBe(
+    false,
+  );
+  expect(migrated.input(input.id)?.text).toBe("Keep this history");
+});

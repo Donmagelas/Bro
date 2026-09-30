@@ -235,3 +235,44 @@ test("ChatGPT model choices belong to each session and new-session defaults pers
   expect(reopened.getSettings().defaultModel).toBe(a.id);
   reopened.db.close();
 }, 30000);
+
+test("project lifecycle endpoints keep session history and the local directory intact", async () => {
+  const host = setup();
+  const path = join(host.store.root, "workspaces");
+  const file = join(path, "keep.txt");
+  await Bun.write(file, "local file");
+  const project = (await req(host, "/projects", { path })).data;
+  const session = (await req(host, "/sessions", { projectId: project.id }))
+    .data;
+  host.store.enqueue(session.id, "Retained message", { kind: "gui" });
+  const renamed = await req(
+    host,
+    `/projects/${project.id}`,
+    { name: "Renamed", archived: true },
+    "PATCH",
+  );
+  expect(renamed.status).toBe(200);
+  expect(renamed.data).toMatchObject({ name: "Renamed", archived: true });
+  expect(
+    (await req(host, `/projects/${project.id}`, { archived: "false" }, "PATCH"))
+      .status,
+  ).toBe(400);
+  expect(
+    (await req(host, `/projects/${project.id}`, { archived: false }, "PATCH"))
+      .data.archived,
+  ).toBe(false);
+  expect(
+    (await req(host, `/projects/${project.id}`, undefined, "DELETE")).status,
+  ).toBe(200);
+  expect(host.store.session(session.id)).toMatchObject({
+    projectId: null,
+    cwd: path,
+  });
+  expect(
+    (await req(host, `/sessions/${session.id}/history`)).data.inputs[0].text,
+  ).toBe("Retained message");
+  expect(await Bun.file(file).text()).toBe("local file");
+  expect(
+    (await req(host, `/projects/${project.id}`, undefined, "DELETE")).status,
+  ).toBe(404);
+});
