@@ -180,6 +180,12 @@ function App() {
   const statsSequence = useRef(0);
   const [diff, setDiff] = useState<any>(null);
   const [usage, setUsage] = useState<any>(null);
+  const [quoteSelection, setQuoteSelection] = useState<{
+    messageId: string;
+    quote: string;
+    left: number;
+    top: number;
+  } | null>(null);
   const [question, setQuestion] = useState<{
     title: string;
     value: string;
@@ -290,6 +296,82 @@ function App() {
     (p) => p.id === (session ? session.projectId : activeProjectId),
   );
   useEffect(() => {
+    setQuoteSelection(null);
+    if (
+      !selected ||
+      session?.archived ||
+      question ||
+      settings ||
+      diff ||
+      confirmation
+    )
+      return;
+    const updateSelection = () => {
+      const selection = window.getSelection();
+      const quote = selection?.toString().trim();
+      if (!quote || !selection || selection.rangeCount !== 1) {
+        setQuoteSelection(null);
+        return;
+      }
+      const range = selection.getRangeAt(0);
+      const start = range.startContainer;
+      const markdown = (
+        start instanceof Element ? start : start.parentElement
+      )?.closest(".message.assistant .markdown");
+      const messageId = markdown
+        ?.closest("[data-message-id]")
+        ?.getAttribute("data-message-id");
+      const bounds = markdown
+        ?.closest(".conversation")
+        ?.getBoundingClientRect();
+      // Both ends must belong to the same completed assistant reply.
+      if (!messageId || !bounds || !markdown?.contains(range.endContainer)) {
+        setQuoteSelection(null);
+        return;
+      }
+      const rect = Array.from(range.getClientRects())
+        .filter(
+          (r) =>
+            r.width > 0 &&
+            r.height > 0 &&
+            r.bottom > bounds.top &&
+            r.top < bounds.bottom,
+        )
+        .at(-1);
+      if (!rect) {
+        setQuoteSelection(null);
+        return;
+      }
+      setQuoteSelection({
+        messageId,
+        quote,
+        left: Math.max(bounds.left + 8, Math.min(rect.left, bounds.right - 80)),
+        top: Math.max(
+          bounds.top + 8,
+          Math.min(
+            rect.bottom + 38 < bounds.bottom ? rect.bottom + 6 : rect.top - 36,
+            bounds.bottom - 38,
+          ),
+        ),
+      });
+    };
+    document.addEventListener("selectionchange", updateSelection);
+    document.addEventListener("scroll", updateSelection, true);
+    window.addEventListener("resize", updateSelection);
+    return () => {
+      document.removeEventListener("selectionchange", updateSelection);
+      document.removeEventListener("scroll", updateSelection, true);
+      window.removeEventListener("resize", updateSelection);
+    };
+  }, [
+    selected,
+    session?.archived,
+    !!question,
+    settings,
+    !!diff,
+    !!confirmation,
+  ]);
+  useEffect(() => {
     const seq = ++statsSequence.current;
     if (!selected) return;
     void api(`/sessions/${selected}/stats`)
@@ -338,7 +420,12 @@ function App() {
     return s.id as string;
   };
   async function send() {
-    if (!draft.trim() || sendLock.current || savingModel || session?.archived)
+    if (
+      (!draft.trim() && !annotations.length) ||
+      sendLock.current ||
+      savingModel ||
+      session?.archived
+    )
       return;
     if (!(session?.connectionId || state?.settings.defaultConnectionId)) {
       setSettingsTab("模型");
@@ -351,21 +438,23 @@ function App() {
     setError("");
     followBottom.current = true;
     const snapshot = { text: draft, attachments, annotations };
+    const text = draft.trim() ? draft : "请根据批注继续。";
     const inputId = crypto.randomUUID();
     const version = navigationVersion.current;
     let id = selected;
-    setOutgoing({ id: inputId, sessionId: id, draftKey, text: snapshot.text });
+    setOutgoing({ id: inputId, sessionId: id, draftKey, text });
     try {
       if (!id) id = await createSession(activeProjectId, version);
       setOutgoing({
         id: inputId,
         sessionId: id,
         draftKey,
-        text: snapshot.text,
+        text,
       });
       const input = await api(`/sessions/${id}/messages`, "POST", {
         id: inputId,
         ...snapshot,
+        text,
         mode,
       });
       if (selectedRef.current === id && input.id)
@@ -391,6 +480,8 @@ function App() {
         startNewSession();
       }
       if (event.key === "Escape") {
+        window.getSelection()?.removeAllRanges();
+        setQuoteSelection(null);
         setQuestion(null);
         setDiff(null);
         setSettings(false);
@@ -500,23 +591,16 @@ function App() {
       });
     }
   }
-  function annotate(message: ChatMessage) {
-    const selection = window.getSelection();
-    const quote = selection?.toString().trim();
-    const node =
-      selection?.anchorNode?.parentElement?.closest("[data-message-id]");
-    if (!quote || node?.getAttribute("data-message-id") !== message.id) {
-      setError("先选中回复中的一段文字，再添加批注。");
-      return;
-    }
+  function annotate() {
+    if (!quoteSelection) return;
+    const { messageId, quote } = quoteSelection;
+    window.getSelection()?.removeAllRanges();
+    setQuoteSelection(null);
     setQuestion({
       title: "对选中内容的意见",
       value: "",
       submit: (comment) =>
-        setAnnotations((v) => [
-          ...v,
-          { messageId: message.id, quote, comment },
-        ]),
+        setAnnotations((v) => [...v, { messageId, quote, comment }]),
     });
   }
   return (
@@ -810,15 +894,6 @@ function App() {
                             <p>{a.comment}</p>
                           </div>
                         ))}
-                      {m.role === "assistant" && (
-                        <button
-                          className="annotation-button"
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => annotate(m)}
-                        >
-                          选中文字后批注
-                        </button>
-                      )}
                     </>
                   )}
                 </article>
@@ -1045,7 +1120,10 @@ function App() {
                   className="send-button"
                   aria-label="发送"
                   disabled={
-                    !draft.trim() || busy || savingModel || session?.archived
+                    (!draft.trim() && !annotations.length) ||
+                    busy ||
+                    savingModel ||
+                    session?.archived
                   }
                   onClick={() => void send()}
                 >
@@ -1080,6 +1158,16 @@ function App() {
           </div>
         </div>
       </main>
+      {quoteSelection && (
+        <button
+          className="annotation-button"
+          style={{ left: quoteSelection.left, top: quoteSelection.top }}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={annotate}
+        >
+          批注
+        </button>
+      )}
       {settings && state && (
         <SettingsPanel
           state={state}
