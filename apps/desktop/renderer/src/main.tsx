@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { VERSION } from "../../../../packages/contracts";
 import type {
   Annotation,
   Attachment,
@@ -566,11 +567,7 @@ function App() {
           onProjectAction={projectAction}
         />
         <div className="sidebar-bottom">
-          <div className="host-status">
-            <span className={`status-dot ${state ? "idle" : "error"}`} />
-            {state ? "后台已连接" : "连接后台…"}
-            <span>0.1</span>
-          </div>
+          <div className="app-version">v{VERSION}</div>
           <button className="nav-button" onClick={() => setSettings(true)}>
             <Icon name="settings" />
             设置与连接

@@ -313,16 +313,10 @@ svg {
   padding-top: 10px;
   border-top: 1px solid #70563a;
 }
-.host-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 10px;
+.app-version {
   color: #ad9474;
   padding: 9px;
-}
-.host-status span:last-child {
-  margin-left: auto;
+  text-align: right;
   font-family: var(--pixel);
   font-size: 9px;
 }
