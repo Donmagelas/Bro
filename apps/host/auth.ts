@@ -4,6 +4,7 @@ import type {
   Connection,
   ModelChoice,
   Thinking,
+  ChatGPTQuota,
 } from "../../packages/contracts";
 
 export class AccountAuth {
@@ -13,6 +14,9 @@ export class AccountAuth {
   private pending = new Set<Promise<unknown>>();
   private closing?: Promise<void>;
   private login?: Promise<void>;
+  private quotaCache?: ChatGPTQuota;
+  private quotaRequest?: Promise<ChatGPTQuota>;
+  private quotaController?: AbortController;
   private controller?: AbortController;
   private answer?: {
     resolve: (value: string) => void;
@@ -111,9 +115,139 @@ export class AccountAuth {
       };
     });
   }
+  quota(force = false): Promise<ChatGPTQuota> {
+    if (this.closing) return Promise.reject(new Error("认证服务已关闭"));
+    if (this.quotaRequest) return this.quotaRequest;
+    if (
+      !force &&
+      this.quotaCache &&
+      Date.now() - this.quotaCache.checkedAt < 60000
+    )
+      return Promise.resolve(this.quotaCache);
+    const controller = new AbortController();
+    this.quotaController = controller;
+    const signal = AbortSignal.any([
+      controller.signal,
+      AbortSignal.timeout(12000),
+    ]);
+    const request = this.use(async (): Promise<ChatGPTQuota> => {
+      await this.storage.credentials.reload();
+      const accounts = await this.storage.oauth.accessAll("openai-codex", {
+        signal,
+      });
+      if (!accounts.length)
+        return { status: "signed_out", checkedAt: Date.now(), accounts: [] };
+      const provider = this.storage.usage.providerFor("openai-codex");
+      const results = await Promise.all(
+        accounts.map(async (account: any, index: number) => {
+          const report =
+            account.ok && provider
+              ? await provider
+                  .fetchUsage(
+                    {
+                      provider: "openai-codex",
+                      credential: {
+                        type: "oauth",
+                        accessToken: account.accessToken,
+                        accountId: account.accountId,
+                      },
+                      signal,
+                    },
+                    { fetch },
+                  )
+                  .catch(() => null)
+              : null;
+          const credits = report?.raw?.credits;
+          const balance =
+            credits?.balance !== undefined &&
+            credits.balance !== null &&
+            credits.balance !== ""
+              ? Number(credits.balance)
+              : NaN;
+          return {
+            id: String(account.credentialId ?? index),
+            email: account.email,
+            updatedAt: report?.fetchedAt,
+            windows: (report?.limits || []).map((limit: any) => {
+              const duration = limit.window?.durationMs;
+              const base = [
+                "openai-codex:primary",
+                "openai-codex:secondary",
+              ].includes(limit.id);
+              const label =
+                duration === 604800000
+                  ? "每周"
+                  : duration && duration % 3600000 === 0
+                    ? `${duration / 3600000} 小时`
+                    : limit.window?.label || "当前周期";
+              const remaining =
+                limit.amount?.remainingFraction !== undefined
+                  ? limit.amount.remainingFraction * 100
+                  : limit.amount?.usedFraction !== undefined
+                    ? (1 - limit.amount.usedFraction) * 100
+                    : NaN;
+              return {
+                id: limit.id,
+                label: base ? label : limit.label,
+                remainingPercent: Number.isFinite(remaining)
+                  ? Math.max(0, Math.min(100, remaining))
+                  : null,
+                resetsAt: Number.isFinite(limit.window?.resetsAt)
+                  ? limit.window.resetsAt
+                  : null,
+              };
+            }),
+            ...(credits
+              ? {
+                  credits: {
+                    unlimited: credits.unlimited === true,
+                    balance: Number.isFinite(balance) ? balance : null,
+                  },
+                }
+              : {}),
+          };
+        }),
+      );
+      return {
+        status: results.some((a) => a.updatedAt !== undefined)
+          ? "ready"
+          : "unavailable",
+        checkedAt: Date.now(),
+        accounts: results,
+      };
+    })
+      .catch(
+        (): ChatGPTQuota => ({
+          status: "unavailable",
+          checkedAt: Date.now(),
+          accounts: [],
+        }),
+      )
+      .then((result) => {
+        if (controller.signal.aborted)
+          return {
+            status: "unavailable",
+            checkedAt: Date.now(),
+            accounts: [],
+          } as ChatGPTQuota;
+        this.quotaCache = result;
+        return result;
+      })
+      .finally(() => {
+        if (this.quotaRequest === request) this.quotaRequest = undefined;
+      });
+    this.quotaRequest = request;
+    return request;
+  }
+  private clearQuota() {
+    this.quotaController?.abort();
+    this.quotaRequest = undefined;
+    this.quotaCache = undefined;
+  }
   start() {
     return this.use(async () => {
       if (this.controller) throw new Error("登录正在进行");
+      this.clearQuota();
       this.controller = new AbortController();
       this.loginState = { status: "starting" };
       this.changed();
@@ -141,6 +275,7 @@ export class AccountAuth {
         })
         .then((identity: any) => {
           if (!identity) throw new Error("登录未保存账号");
+          this.clearQuota();
           this.loginState = { status: "success" };
           this.changed();
         })
@@ -180,12 +315,14 @@ export class AccountAuth {
       this.cancel();
       await this.login;
       await this.storage.credentials.remove("openai-codex");
+      this.clearQuota();
       this.changed();
     });
   }
   close(): Promise<void> {
     return (this.closing ??= (async () => {
       this.cancel();
+      this.clearQuota();
       // Initialization/credential reads may still own the database. Login also
       // needs to finish cancelling before its store can be closed safely.
       await Promise.allSettled([...this.pending]);

@@ -270,6 +270,16 @@ export function createHost(
         if (path === "/state" && method === "GET") return json(state());
         if (path === "/auth/status" && method === "GET")
           return json(await oauth.status());
+        if (path === "/auth/quota" && method === "GET") {
+          const connection = store.connection(
+            url.searchParams.get("connectionId") || "",
+          );
+          if (connection?.kind !== "chatgpt")
+            return json({ error: "请使用 ChatGPT 账号连接" }, 400);
+          return json(
+            await oauth.quota(url.searchParams.get("refresh") === "1"),
+          );
+        }
         if (path === "/models" && method === "GET")
           return json(
             (

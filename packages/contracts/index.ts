@@ -28,6 +28,22 @@ export interface ModelChoice {
   thinkingLevels: Thinking[];
   defaultThinking: Thinking;
 }
+export interface ChatGPTQuota {
+  status: "ready" | "signed_out" | "unavailable";
+  checkedAt: number;
+  accounts: {
+    id: string;
+    email?: string;
+    updatedAt?: number;
+    windows: {
+      id: string;
+      label: string;
+      remainingPercent: number | null;
+      resetsAt: number | null;
+    }[];
+    credits?: { unlimited: boolean; balance: number | null };
+  }[];
+}
 export interface Connection {
   id: string;
   name: string;

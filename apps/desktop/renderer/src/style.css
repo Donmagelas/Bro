@@ -313,6 +313,67 @@ svg {
   padding-top: 10px;
   border-top: 1px solid #70563a;
 }
+.account-quota {
+  padding: 2px 9px 5px;
+  color: #e8d7ba;
+  font-size: 11px;
+  max-height: 230px;
+  overflow-y: auto;
+}
+.quota-heading,
+.quota-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.quota-heading {
+  font-weight: 650;
+  margin-bottom: 5px;
+}
+.quota-heading button {
+  color: #d3bc92;
+  font-size: 18px;
+  padding: 0 3px;
+  line-height: 1;
+}
+.quota-window {
+  margin-top: 8px;
+}
+.quota-line strong {
+  color: #c1d59d;
+  font-size: 12px;
+}
+.quota-window.low strong {
+  color: #f0aa77;
+}
+.quota-window progress {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 4px;
+  margin: 5px 0;
+  border: 0;
+}
+.quota-window progress::-webkit-progress-bar {
+  background: #6b523f;
+}
+.quota-window progress::-webkit-progress-value {
+  background: #9aae78;
+}
+.quota-window.low progress::-webkit-progress-value {
+  background: #dd9966;
+}
+.quota-note {
+  font-size: 10px;
+  line-height: 1.5;
+  color: #bba588;
+}
+.quota-email {
+  overflow-wrap: anywhere;
+  margin-top: 8px;
+  color: #d8c6a6;
+}
 .app-version {
   color: #ad9474;
   padding: 9px;

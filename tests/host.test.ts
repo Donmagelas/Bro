@@ -56,6 +56,13 @@ test("host rejects unauthenticated requests and does not expose secrets in state
     apiKey: "private-secret",
   });
   expect(c.status).toBe(200);
+  expect(
+    (await req(host, `/auth/quota?connectionId=${c.data.id}`)).status,
+  ).toBe(400);
+  const quotaDenied = await fetch(
+    `http://127.0.0.1:${host.server.port}/auth/quota?connectionId=${c.data.id}`,
+  );
+  expect(quotaDenied.status).toBe(401);
   expect(JSON.stringify((await req(host, "/state")).data)).not.toContain(
     "private-secret",
   );

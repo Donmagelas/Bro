@@ -31,6 +31,7 @@ import {
   type StreamMessage,
 } from "./conversation";
 import { OutboxPanel } from "./OutboxPanel";
+import { AccountQuota } from "./AccountQuota";
 import { PixelIcon, PixelScene, rooms } from "./PixelScene";
 
 declare global {
@@ -729,6 +730,12 @@ function App() {
           onProjectAction={projectAction}
         />
         <div className="sidebar-bottom">
+          {activeConnection?.kind === "chatgpt" && (
+            <AccountQuota
+              key={activeConnection.id}
+              connectionId={activeConnection.id}
+            />
+          )}
           <div className="app-version">v{VERSION}</div>
           <button className="nav-button" onClick={() => setSettings(true)}>
             <Icon name="settings" />
