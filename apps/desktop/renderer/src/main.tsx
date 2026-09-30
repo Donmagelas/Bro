@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { createRoot } from "react-dom/client";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -18,6 +24,12 @@ import "./style.css";
 import { ResourcePanel } from "./ResourcePanel";
 import { ExperimentPanel } from "./ExperimentPanel";
 import { useDrafts } from "./useDrafts";
+import {
+  messageText as textOf,
+  projectConversation,
+  uncommittedMessages,
+  type StreamMessage,
+} from "./conversation";
 import { OutboxPanel } from "./OutboxPanel";
 import { PixelIcon, PixelScene, rooms } from "./PixelScene";
 
@@ -34,6 +46,7 @@ declare global {
     };
   }
 }
+const emptyStream: StreamMessage[] = [];
 const brandIcon = new URL("../../assets/icon.png", import.meta.url).href;
 const thinkingLabels: Record<Thinking, string> = {
   off: "不思考",
@@ -112,19 +125,6 @@ function errorText(error: unknown): string {
     .replace(/^Error invoking remote method '[^']+': /, "")
     .replace(/^(?:Error: )+/, "");
 }
-function textOf(message: ChatMessage): string {
-  if (
-    message.role === "user" &&
-    message.bro?.inputs.every((i) => i.text !== undefined)
-  )
-    return message.bro.inputs.map((i) => i.text).join("\n\n");
-  if (typeof message.content === "string") return message.content;
-  if (!Array.isArray(message.content)) return "";
-  return message.content
-    .filter((c: any) => c.type === "text")
-    .map((c: any) => c.text)
-    .join("\n");
-}
 function App() {
   const [models, setModels] = useState<ModelChoice[]>([]);
   const [savingModel, setSavingModel] = useState(false);
@@ -151,8 +151,25 @@ function App() {
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [mode, setMode] = useState<"queue" | "steer">("queue");
-  const [live, setLive] = useState(""),
-    [tool, setTool] = useState(""),
+  const [streams, setStreams] = useState<Record<string, StreamMessage[]>>({});
+  const streamed = (selected && streams[selected]) || emptyStream;
+  const currentStreams = useRef(
+    new Map<string, { id: string; timestamp?: number }>(),
+  );
+  const updateStream = useCallback(
+    (id: string, update: (old: StreamMessage[]) => StreamMessage[]) => {
+      setStreams((old) => {
+        const next = { ...old };
+        const messages = update(old[id] || emptyStream);
+        if (messages.length) next[id] = messages;
+        else delete next[id];
+        return next;
+      });
+    },
+    [],
+  );
+  const live = streamed.some((m) => m.streaming && textOf(m));
+  const [tool, setTool] = useState(""),
     [menu, setMenu] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [confirmation, setConfirmation] = useState<{
@@ -167,6 +184,9 @@ function App() {
     sessionId: string | null;
     draftKey: string | null;
     text: string;
+    attachments: Attachment[];
+    annotations: Annotation[];
+    queued: boolean;
   } | null>(null);
   const visibleOutgoing =
     outgoing &&
@@ -177,6 +197,7 @@ function App() {
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const sendLock = useRef(false);
   const followBottom = useRef(true);
+  const [showJump, setShowJump] = useState(false);
   const statsSequence = useRef(0);
   const [diff, setDiff] = useState<any>(null);
   const [usage, setUsage] = useState<any>(null);
@@ -222,22 +243,28 @@ function App() {
       setError(String(e));
     }
   }, []);
-  const load = useCallback(async (id: string) => {
-    try {
-      const seq = ++loadSequence.current;
-      const data = await api(`/sessions/${id}/history`);
-      if (selectedRef.current === id && seq === loadSequence.current) {
-        setLoadingHistory(false);
-        setMessages(data.messages);
-        setInputs(data.inputs);
+  const load = useCallback(
+    async (id: string) => {
+      try {
+        const seq = ++loadSequence.current;
+        const data = await api(`/sessions/${id}/history`);
+        if (selectedRef.current === id && seq === loadSequence.current) {
+          setLoadingHistory(false);
+          setMessages(data.messages);
+          updateStream(id, (current) =>
+            uncommittedMessages(data.messages, current),
+          );
+          setInputs(data.inputs);
+        }
+      } catch (e) {
+        if (selectedRef.current === id) {
+          setLoadingHistory(false);
+          setError(String(e));
+        }
       }
-    } catch (e) {
-      if (selectedRef.current === id) {
-        setLoadingHistory(false);
-        setError(String(e));
-      }
-    }
-  }, []);
+    },
+    [updateStream],
+  );
   useEffect(() => {
     void refresh();
     return window.bro.onEvent((event) => {
@@ -245,49 +272,76 @@ function App() {
         void refresh();
         if (selectedRef.current) void load(selectedRef.current);
       }
-      if (event.sessionId === selectedRef.current) {
-        if (event.type === "runtime") {
-          const e = event.data;
+      if (event.sessionId && event.type === "runtime") {
+        const e = event.data;
+        if (
+          ["message_start", "message_update", "message_end"].includes(e.type) &&
+          e.message?.role === "assistant"
+        ) {
+          let current = currentStreams.current.get(event.sessionId);
           if (
-            e.type === "message_update" &&
-            e.assistantMessageEvent?.type === "text_delta"
-          )
-            setLive((v) => v + e.assistantMessageEvent.delta);
+            e.type === "message_start" ||
+            !current ||
+            current.timestamp !== e.message.timestamp
+          ) {
+            current = {
+              id: `stream-${crypto.randomUUID()}`,
+              timestamp: e.message.timestamp,
+            };
+            currentStreams.current.set(event.sessionId, current);
+          }
+          const message: StreamMessage = {
+            ...e.message,
+            id: current.id,
+            streaming: e.type !== "message_end",
+          };
+          updateStream(event.sessionId, (buffered) => {
+            const index = buffered.findIndex((m) => m.id === message.id);
+            return index < 0
+              ? [...buffered, message]
+              : buffered.map((m, i) => (i === index ? message : m));
+          });
+        }
+        if (e.type === "agent_end" && e.isTerminal !== false)
+          currentStreams.current.delete(event.sessionId);
+        if (event.sessionId === selectedRef.current) {
           if (e.type === "tool_execution_start") setTool(e.toolName);
           if (e.type === "tool_execution_end") setTool("");
           if (
             e.type === "message_end" ||
             (e.type === "agent_end" && e.isTerminal !== false)
-          ) {
-            setLive("");
-            if (selectedRef.current) void load(selectedRef.current);
-          }
-        } else if (event.type === "history") {
+          )
+            void load(event.sessionId);
+        }
+      } else if (event.sessionId && event.type === "history") {
+        updateStream(event.sessionId, (current) =>
+          uncommittedMessages(event.data, current),
+        );
+        if (event.sessionId === selectedRef.current) {
           loadSequence.current++;
           setMessages(event.data);
           setLoadingHistory(false);
-          setLive("");
           setTool("");
         }
       }
       if (event.type === "disconnected") setError("后台连接正在恢复…");
     });
-  }, [refresh, load]);
+  }, [refresh, load, updateStream]);
   useEffect(() => {
     setUsage(null);
     setMessages([]);
     setInputs([]);
-    setLive("");
     setTool("");
     setMenu(false);
     setLoadingHistory(!!selected);
     followBottom.current = true;
+    setShowJump(false);
     if (selected) void load(selected);
   }, [selected, load]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (followBottom.current)
       bottom.current?.scrollIntoView({ behavior: "instant" });
-  }, [messages.length, inputs.length, outgoing, live, tool]);
+  }, [messages, inputs, outgoing, streamed, tool]);
   const session = [
     ...(state?.sessions || []),
     ...(state?.archivedSessions || []),
@@ -342,6 +396,7 @@ function App() {
         setQuoteSelection(null);
         return;
       }
+      followBottom.current = false;
       setQuoteSelection({
         messageId,
         quote,
@@ -442,14 +497,28 @@ function App() {
     const inputId = crypto.randomUUID();
     const version = navigationVersion.current;
     let id = selected;
-    setOutgoing({ id: inputId, sessionId: id, draftKey, text });
+    const queued =
+      !!selected &&
+      mode === "queue" &&
+      (["starting", "running", "waiting"].includes(session?.status || "") ||
+        inputs.some((i) => ["running", "queued"].includes(i.status)));
+    setOutgoing({
+      id: inputId,
+      sessionId: id,
+      draftKey,
+      ...snapshot,
+      text,
+      queued,
+    });
     try {
       if (!id) id = await createSession(activeProjectId, version);
       setOutgoing({
         id: inputId,
         sessionId: id,
         draftKey,
+        ...snapshot,
         text,
+        queued,
       });
       const input = await api(`/sessions/${id}/messages`, "POST", {
         id: inputId,
@@ -603,6 +672,15 @@ function App() {
         setAnnotations((v) => [...v, { messageId, quote, comment }]),
     });
   }
+  const conversation = projectConversation(
+    messages,
+    streamed,
+    inputs,
+    visibleOutgoing ? outgoing : null,
+    session?.status === "starting" ||
+      (session?.status === "idle" && !live && !tool) ||
+      !!(visibleOutgoing && outgoing && !outgoing.queued),
+  );
   return (
     <div className="app">
       <aside className="sidebar">
@@ -751,6 +829,7 @@ function App() {
             const el = e.currentTarget;
             followBottom.current =
               el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+            setShowJump(!followBottom.current);
           }}
         >
           {!messages.length &&
@@ -799,7 +878,7 @@ function App() {
                 正在读取会话…
               </div>
             )}
-            {messages
+            {conversation.messages
               .filter(
                 (m) =>
                   m.role !== "assistant" ||
@@ -809,8 +888,19 @@ function App() {
               )
               .map((m) => (
                 <article
-                  data-message-id={m.id}
-                  key={m.id}
+                  data-message-id={m.transient ? undefined : m.id}
+                  key={
+                    m.role === "user" && m.bro?.inputs[0]?.id
+                      ? `input-${m.bro.inputs[0].id}`
+                      : m.id
+                  }
+                  aria-label={
+                    m.role === "user"
+                      ? "你的消息"
+                      : m.role === "assistant"
+                        ? "Bro 的回复"
+                        : "工具结果"
+                  }
                   className={`message ${m.role}`}
                 >
                   {m.role === "toolResult" ? (
@@ -834,9 +924,6 @@ function App() {
                     </details>
                   ) : (
                     <>
-                      <div className="message-author">
-                        {m.role === "user" ? "你" : "Bro"}
-                      </div>
                       {Array.isArray(m.content) &&
                         m.content
                           .filter((c: any) => c.type === "image" && c.data)
@@ -848,27 +935,46 @@ function App() {
                               alt="会话图片"
                             />
                           ))}
-                      <div className="markdown">
-                        <Markdown
-                          remarkPlugins={[remarkGfm]}
-                          components={{
-                            a: ({ href, children }) => (
-                              <a
-                                href="#"
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  if (href)
-                                    void run(() => window.bro.open(href));
-                                }}
-                              >
-                                {children}
-                              </a>
-                            ),
-                          }}
-                        >
-                          {textOf(m)}
-                        </Markdown>
-                      </div>
+                      {m.role === "user" ? (
+                        <div className="plain-message">{textOf(m)}</div>
+                      ) : (
+                        <div className="markdown">
+                          <Markdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              a: ({ href, children }) => (
+                                <a
+                                  href="#"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    if (href)
+                                      void run(() => window.bro.open(href));
+                                  }}
+                                >
+                                  {children}
+                                </a>
+                              ),
+                            }}
+                          >
+                            {textOf(m)}
+                          </Markdown>
+                        </div>
+                      )}
+                      {m.role === "user" &&
+                        m.delivery &&
+                        [
+                          "sending",
+                          "failed",
+                          "interrupted",
+                          "cancelled",
+                        ].includes(m.delivery) && (
+                          <div className={`message-delivery ${m.delivery}`}>
+                            {m.delivery === "sending"
+                              ? "发送中…"
+                              : labels[m.delivery]}
+                            {m.error && <div>{m.error}</div>}
+                          </div>
+                        )}
                       {!!m.bro?.inputs.some((i) => i.attachments?.length) && (
                         <div className="message-attachments">
                           {m.bro.inputs
@@ -898,42 +1004,12 @@ function App() {
                   )}
                 </article>
               ))}
-            {live && (
-              <article className="message assistant">
-                <div className="message-author">Bro</div>
-                <div className="markdown">
-                  <Markdown>{live}</Markdown>
-                </div>
-              </article>
-            )}
             {tool && (
-              <div className="running-tool">
+              <div className="running-tool" role="status">
                 <span className="spinner" />
-                {tool}
+                正在执行 {tool}
               </div>
             )}
-            {visibleOutgoing && outgoing && (
-              <article className="message user sending">
-                <div className="message-author">你 · 发送中</div>
-                <div className="plain-message">{outgoing.text}</div>
-              </article>
-            )}
-            {inputs
-              .filter(
-                (i) =>
-                  i.status !== "cancelled" &&
-                  !messages.some((m) =>
-                    m.bro?.inputs.some((item) => item.id === i.id),
-                  ) &&
-                  i.id !== outgoing?.id,
-              )
-              .map((i) => (
-                <div className={`queue-item ${i.status}`} key={i.id}>
-                  <span>{labels[i.status]}</span>
-                  <p>{i.text}</p>
-                  {i.error && <small>{i.error}</small>}
-                </div>
-              ))}
             {!live &&
               !tool &&
               ["starting", "waiting", "running"].includes(
@@ -966,6 +1042,38 @@ function App() {
           </div>
         </div>
         <div className="composer-wrap">
+          {showJump && (
+            <button
+              className="jump-to-latest"
+              aria-label="回到最新消息"
+              onClick={() => {
+                followBottom.current = true;
+                setShowJump(false);
+                bottom.current?.scrollIntoView({ behavior: "instant" });
+              }}
+            >
+              ↓
+            </button>
+          )}
+          {(conversation.queue.length > 0 || conversation.sending) && (
+            <div className="message-queue" aria-label="待发送消息">
+              <div className="queue-heading">
+                待发送 ·{" "}
+                {conversation.queue.length + (conversation.sending ? 1 : 0)}
+              </div>
+              {conversation.queue.map((i) => (
+                <div className="queue-item" key={i.id}>
+                  <p>{i.text}</p>
+                </div>
+              ))}
+              {conversation.sending && (
+                <div className="queue-item">
+                  <p>{conversation.sending.text}</p>
+                  <small>发送中…</small>
+                </div>
+              )}
+            </div>
+          )}
           <div className="composer">
             {!!attachments.length && (
               <div className="attachments">

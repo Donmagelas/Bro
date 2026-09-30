@@ -488,47 +488,44 @@ svg {
 }
 .messages {
   max-width: 860px;
-  padding: 24px 42px 34px;
+  padding: 28px 32px 36px;
   margin: auto;
 }
 .messages:empty {
   padding: 0;
 }
 .message {
-  padding: 24px 0;
-  line-height: 1.85;
+  padding: 12px 0;
+  margin: 0 0 20px;
+  line-height: 1.75;
   position: relative;
+  min-width: 0;
 }
 .message.user {
-  padding: 16px 20px;
-  margin: 10px 0 20px 38px;
-  background: #ece1c8;
-  border: 1px solid #d4c19c;
-  box-shadow: 3px 3px #e5d4b5;
+  width: fit-content;
+  max-width: 82%;
+  padding: 11px 16px;
+  margin: 0 0 28px auto;
+  background: #e9ddc6;
+  border: 1px solid #dac8a74d;
+  border-radius: 12px;
 }
-.message-author {
-  font-size: 10px;
-  font-weight: 750;
-  color: #936444;
-  margin-bottom: 9px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  letter-spacing: 0.5px;
+.message.assistant + .message.assistant {
+  margin-top: -14px;
 }
-.message.assistant > .message-author:before {
-  content: "";
-  width: 10px;
-  height: 10px;
-  background: #66864c;
-  box-shadow: 3px 3px #c2ceaf;
+.message-delivery {
+  font-size: 11px;
+  margin-top: 6px;
+  color: var(--muted);
+  text-align: right;
 }
-.user .message-author {
-  color: #839272;
+.message-delivery.failed,
+.message-delivery.interrupted {
+  color: #a24235;
 }
 .markdown,
 .plain-message {
-  font-size: 14px;
+  font-size: 15px;
   overflow-wrap: anywhere;
 }
 .plain-message {
@@ -542,8 +539,9 @@ svg {
 }
 .markdown pre,
 .tool-result pre {
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
   background: #e8e9de;
   border: 1px solid #cfd5c1;
   border-left: 3px solid #8ea17a;
@@ -573,6 +571,32 @@ svg {
   margin: 16px 0;
   display: block;
   overflow: auto;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  line-height: 1.45;
+  margin: 22px 0 12px;
+}
+.markdown > :first-child {
+  margin-top: 0;
+}
+.markdown h1 {
+  font-size: 23px;
+}
+.markdown h2 {
+  font-size: 20px;
+}
+.markdown h3 {
+  font-size: 17px;
+}
+.markdown ul,
+.markdown ol {
+  padding-left: 24px;
+  margin: 12px 0;
+}
+.markdown li {
+  margin: 4px 0;
 }
 .markdown td,
 .markdown th {
@@ -607,10 +631,18 @@ svg {
 }
 .tool-result {
   font-size: 12px;
-  color: #71815f;
-  background: #ebece0;
-  border: 1px solid #d6dbc8;
-  padding: 10px 13px;
+  color: var(--muted);
+  padding: 2px 0;
+}
+.message.toolResult {
+  padding: 0;
+  margin: -6px 0 16px;
+}
+.tool-result[open] {
+  color: var(--ink);
+}
+.tool-result pre {
+  max-height: 360px;
 }
 .tool-result summary {
   cursor: pointer;
@@ -640,31 +672,38 @@ svg {
   animation: blink 0.8s steps(2, end) infinite;
   box-shadow: 4px 4px #e1ca9e;
 }
+.message-queue {
+  max-height: 150px;
+  overflow: auto;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  background: #eee3d0;
+}
+.queue-heading {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
 .queue-item {
-  padding: 13px 17px;
-  background: #f1ecd9;
-  border: 1px dashed #c7c6a5;
-  margin: 10px 0;
-  color: #6c765c;
+  padding: 5px 0;
+  color: var(--ink);
   font-size: 13px;
 }
-.queue-item > span {
-  font-size: 10px;
-  display: block;
-  color: #8e946e;
+.queue-item + .queue-item {
+  border-top: 1px solid var(--line);
 }
 .queue-item p {
-  margin: 5px 0;
+  margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
 }
 .queue-item small {
-  color: #ac6850;
-}
-.queue-item.failed,
-.queue-item.interrupted {
-  background: #f6e7dd;
-  border-color: #debda9;
+  color: var(--muted);
 }
 .inline-error,
 .error-banner {
@@ -689,9 +728,22 @@ svg {
   flex: 1;
 }
 .composer-wrap {
-  width: min(880px, 100%);
+  position: relative;
+  width: min(860px, 100%);
   margin: 0 auto;
-  padding: 8px 34px 16px;
+  padding: 8px 32px 16px;
+}
+.jump-to-latest {
+  position: absolute;
+  top: -40px;
+  left: calc(50% - 17px);
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid #c7b08c;
+  background: var(--paper);
+  box-shadow: 0 2px 6px #42312818;
+  font-size: 20px;
 }
 .composer {
   border: 2px solid #ad8153;
