@@ -1683,3 +1683,20 @@ svg {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.desktop-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 24px;
+  border-bottom: 1px solid #d6bb88;
+  background: #f0dfb8;
+  color: #654324;
+  font-size: 12px;
+}
+.desktop-banner span {
+  flex: 1;
+}
+.desktop-banner button {
+  flex-shrink: 0;
+}

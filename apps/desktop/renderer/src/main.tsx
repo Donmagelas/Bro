@@ -832,6 +832,33 @@ function App() {
             </button>
           </div>
         )}
+        {state?.desktop.enabled &&
+          (state.desktop.paused ||
+            state.desktop.mode === "yielding" ||
+            state.desktop.mode === "foreground" ||
+            state.desktop.mode === "background") && (
+            <div className="desktop-banner" role="status">
+              <span>
+                {state.desktop.paused
+                  ? state.desktop.reason
+                  : state.desktop.mode === "yielding"
+                    ? state.desktop.reason
+                    : state.desktop.mode === "foreground"
+                      ? `即将或正在短暂操作前台：${state.desktop.target || "桌面"}；你操作时先让路`
+                      : `正在后台操作 ${state.desktop.target || "应用"}；你可以使用其他应用`}
+              </span>
+              {!state.desktop.paused && (
+                <button
+                  className="secondary"
+                  onClick={() =>
+                    void run(() => api("/desktop/pause", "POST", {}))
+                  }
+                >
+                  暂停桌面输入
+                </button>
+              )}
+            </div>
+          )}
         <div
           className="conversation"
           onScroll={(e) => {
@@ -2244,7 +2271,7 @@ function SettingsPanel({
                 <hr />
                 <h3>Computer Use</h3>
                 <p className="description">
-                  使用本机屏幕与辅助功能。检测到你操作键鼠时暂停，由你手动继续。首次使用需要系统权限。
+                  默认后台操作，不妨碍你使用其他应用。短暂操作同一应用时先让路，停手后重新观察并继续；持续操作才暂停，在对话中说“继续”即可恢复。截图和读取不受影响，前台动作会先提示。
                 </p>
                 <label className="switch-row">
                   <span>启用桌面操作</span>
@@ -2267,16 +2294,6 @@ function SettingsPanel({
                 >
                   检测系统权限
                 </button>
-                {state.desktop.paused && (
-                  <button
-                    className="secondary"
-                    onClick={() =>
-                      void run(() => api("/desktop/resume", "POST", {}))
-                    }
-                  >
-                    手动继续桌面操作
-                  </button>
-                )}
                 {state.desktop.capabilities && (
                   <div className="capabilities">
                     {(

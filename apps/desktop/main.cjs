@@ -5,6 +5,7 @@ const {
   dialog,
   shell,
   Menu,
+  Notification,
 } = require("electron");
 const { join, resolve, dirname, delimiter } = require("node:path");
 const fs = require("node:fs");
@@ -118,8 +119,15 @@ async function subscribe() {
         while ((end = text.indexOf("\n\n")) >= 0) {
           const block = text.slice(0, end);
           text = text.slice(end + 2);
-          if (block.startsWith("data: "))
-            window?.webContents.send("bro:event", JSON.parse(block.slice(6)));
+          if (block.startsWith("data: ")) {
+            const event = JSON.parse(block.slice(6));
+            if (event.type === "desktop_notice" && Notification.isSupported())
+              new Notification({
+                title: "Bro · 前台操作",
+                body: event.message,
+              }).show();
+            window?.webContents.send("bro:event", event);
+          }
         }
       }
     } catch (error) {

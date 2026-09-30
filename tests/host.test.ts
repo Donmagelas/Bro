@@ -573,3 +573,40 @@ test("reply forks keep only the selected history, persist independently and reje
     expect(host.store.sessions()).toHaveLength(count);
   }
 }, 30000);
+
+test("desktop resumes from a fresh GUI or Feishu task, never the paused task or an automatic monitor event", async () => {
+  const host = setup();
+  const session = (await req(host, "/sessions", {})).data;
+  const original = host.store.enqueue(session.id, "work", { kind: "gui" });
+  const desktop = host.state().desktop;
+  desktop.enabled = true;
+  desktop.detectorReady = true;
+  await req(host, "/desktop/pause", {});
+  await expect(
+    host.runtimes.hostCall!(session.id, original.id, "bro_computer", {
+      resume: true,
+    }),
+  ).rejects.toThrow("新的继续指令");
+  expect(desktop.paused).toBe(true);
+  for (const kind of ["gui", "feishu"] as const) {
+    await Bun.sleep(2);
+    const input = host.store.enqueue(session.id, "准备好了，继续", { kind });
+    expect(
+      await host.runtimes.hostCall!(session.id, input.id, "bro_computer", {
+        resume: true,
+      }),
+    ).toMatchObject({ resumed: true });
+    expect(desktop.paused).toBe(false);
+    await req(host, "/desktop/pause", {});
+  }
+  await Bun.sleep(2);
+  const automatic = host.store.enqueue(session.id, "continue", {
+    kind: "monitor",
+  });
+  await expect(
+    host.runtimes.hostCall!(session.id, automatic.id, "bro_computer", {
+      resume: true,
+    }),
+  ).rejects.toThrow("新的继续指令");
+  expect(desktop.paused).toBe(true);
+});

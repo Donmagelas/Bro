@@ -1,31 +1,46 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+export interface InputEvent {
+  type: string;
+  reason?: string;
+  kind?: "key" | "pointer" | "move";
+  pid?: number;
+}
 export class InputMonitor {
   private child?: ReturnType<typeof Bun.spawn>;
+  private starting?: Promise<void>;
+  private generation = 0;
   constructor(
     private root: string,
-    private event: (event: { type: string; reason?: string }) => void,
+    private event: (event: InputEvent) => void,
   ) {}
-  async start() {
-    if (this.child) return;
+  start() {
+    if (this.starting) return this.starting;
+    if (this.child) return Promise.resolve();
+    const pending = this.launch(this.generation).finally(() => {
+      if (this.starting === pending) this.starting = undefined;
+    });
+    return (this.starting = pending);
+  }
+  private async launch(generation: number) {
     let command: string[];
     if (process.platform === "darwin") {
+      const source = join(import.meta.dir, "input-monitor.swift");
+      const digest = createHash("sha256")
+        .update(readFileSync(source))
+        .digest("hex")
+        .slice(0, 12);
       const bundled = join(import.meta.dir, "input-monitor-macos");
       const binary = existsSync(bundled)
         ? bundled
-        : join(this.root, "bin", "input-monitor-macos");
+        : join(this.root, "bin", `input-monitor-macos-${digest}`);
       if (!existsSync(binary)) {
         mkdirSync(join(this.root, "bin"), { recursive: true });
-        const compile = Bun.spawn(
-          [
-            "xcrun",
-            "swiftc",
-            join(import.meta.dir, "input-monitor.swift"),
-            "-o",
-            binary,
-          ],
-          { stdout: "pipe", stderr: "pipe" },
-        );
+        const compile = Bun.spawn(["xcrun", "swiftc", source, "-o", binary], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
         const error = await new Response(compile.stderr).text();
         if ((await compile.exited) !== 0) throw new Error(error);
       }
@@ -41,6 +56,7 @@ export class InputMonitor {
         join(import.meta.dir, "input-monitor.ps1"),
       ];
     else throw new Error("此平台没有输入监控实现");
+    if (generation !== this.generation) throw new Error("输入监控启动已取消");
     const child = Bun.spawn(command, {
       stdout: "pipe",
       stderr: "pipe",
@@ -48,56 +64,67 @@ export class InputMonitor {
     });
     this.child = child;
     return new Promise<void>((resolve, reject) => {
-      let ready = false;
+      let ready = false,
+        failure = "";
+      const current = () =>
+        this.child === child && generation === this.generation;
+      const unavailable = (reason: string) => {
+        if (!current() || failure) return;
+        failure = reason;
+        this.event({ type: "unavailable", reason });
+        reject(new Error(reason));
+      };
       const timer = setTimeout(() => {
-        reject(new Error("输入监控启动超时"));
+        unavailable("输入监控启动超时");
         child.kill();
       }, 10000);
       void (async () => {
         let pending = "";
+        const decoder = new TextDecoder();
         for await (const chunk of child.stdout as ReadableStream<Uint8Array>) {
-          pending += new TextDecoder().decode(chunk);
+          if (!current()) break;
+          pending += decoder.decode(chunk, { stream: true });
           let end;
           while ((end = pending.indexOf("\n")) >= 0) {
             const line = pending.slice(0, end);
             pending = pending.slice(end + 1);
             if (!line) continue;
-            const event = JSON.parse(line);
+            const event: InputEvent = JSON.parse(line);
+            if (failure) continue;
             if (event.type === "ready") {
               ready = true;
               clearTimeout(timer);
               resolve();
             } else if (event.type === "unavailable") {
               clearTimeout(timer);
-              reject(new Error(event.reason));
+              unavailable(event.reason || "输入监控不可用");
+              continue;
             }
             this.event(event);
           }
         }
       })().catch((e) => {
-        this.event({ type: "unavailable", reason: String(e) });
-        reject(e);
+        unavailable(String(e));
+        child.kill();
       });
       void new Response(child.stderr as ReadableStream<Uint8Array>)
         .text()
         .then((error) => {
-          if (error)
-            this.event({ type: "unavailable", reason: error.slice(-1000) });
+          if (error) unavailable(error.slice(-1000));
         });
       void child.exited.then((code) => {
         clearTimeout(timer);
-        if (this.child === child) {
+        if (current()) {
+          unavailable(`输入监控已退出 (${code})`);
           this.child = undefined;
-          this.event({
-            type: "unavailable",
-            reason: `输入监控已退出 (${code})`,
-          });
         }
         if (!ready) reject(new Error("输入监控未就绪，请检查系统权限"));
       });
     });
   }
   stop() {
+    this.generation++;
+    this.starting = undefined;
     const child = this.child;
     this.child = undefined;
     child?.kill();

@@ -190,6 +190,9 @@ export interface HostState {
     reason?: string;
     enabled?: boolean;
     detectorReady?: boolean;
+    mode?: "idle" | "read" | "background" | "foreground" | "yielding";
+    target?: string | null;
+    pausedApps?: string[];
     capabilities?: any;
   };
   resources: Omit<Resource, "config" | "plugin">[];

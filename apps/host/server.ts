@@ -77,7 +77,10 @@ export function createHost(
   );
   const feishu = new Feishu(store, changed, (id) => runtimes.wake(id));
   const monitor = new Monitor(store, (id) => runtimes.wake(id), changed);
-  const desktop = new Desktop(root, changed);
+  const desktop = new Desktop(root, changed, undefined, (message) => {
+    for (const listener of listeners)
+      listener({ id: ++version, type: "desktop_notice", message });
+  });
   runtimes.beforeStop = (id) => desktop.cancel(id);
   const oauth = new AccountAuth(store, changed);
   const resources = new Resources(store, () => runtimes.refresh());
@@ -122,10 +125,13 @@ export function createHost(
     const input = store.input(inputId);
     if (!input || input.sessionId !== sessionId)
       throw new Error("无有效任务来源");
-    if (action === "bro_computer")
+    if (action === "bro_computer") {
+      if (args.resume)
+        return desktop.resumeFromMessage(input.createdAt, input.source.kind);
       return args.capabilities
         ? desktop.capabilities()
         : desktop.execute(sessionId, args.operations);
+    }
     if (action === "bro_sessions")
       return store
         .sessions()
@@ -760,9 +766,9 @@ export function createHost(
           return json(settings);
         }
         if (path === "/desktop" && method === "GET")
-          return json(await desktop.capabilities());
-        if (path === "/desktop/resume" && method === "POST") {
-          desktop.resume();
+          return json(await desktop.refresh());
+        if (path === "/desktop/pause" && method === "POST") {
+          desktop.pause();
           return json(desktop.state);
         }
         if (path === "/resources" && method === "POST")
