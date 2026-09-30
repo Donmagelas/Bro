@@ -2239,18 +2239,31 @@ function SettingsPanel({
                   普通聊天和首次飞书会话使用此目录。
                 </p>
                 <div className="path-value">{state.settings.defaultCwd}</div>
-                <button
-                  className="secondary"
-                  onClick={() =>
-                    void run(async () => {
-                      const path = await window.bro.directory();
-                      if (path)
-                        await api("/settings", "PATCH", { defaultCwd: path });
-                    })
-                  }
-                >
-                  更改目录
-                </button>
+                <div className="directory-actions">
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      void run(async () => {
+                        const info = await api("/diagnostics");
+                        await window.bro.open(info.dataRoot);
+                      })
+                    }
+                  >
+                    打开数据目录
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      void run(async () => {
+                        const path = await window.bro.directory();
+                        if (path)
+                          await api("/settings", "PATCH", { defaultCwd: path });
+                      })
+                    }
+                  >
+                    更改目录
+                  </button>
+                </div>
                 <hr />
                 <h3>后台服务</h3>
                 <label className="switch-row">
@@ -2270,18 +2283,6 @@ function SettingsPanel({
                 <p className="description">
                   关闭窗口后，Monitor 和正在运行的任务继续工作。
                 </p>
-                <button
-                  className="secondary"
-                  onClick={() =>
-                    void run(async () => {
-                      const info = await api("/diagnostics");
-                      await window.bro.open(info.dataRoot);
-                    })
-                  }
-                >
-                  打开数据目录
-                </button>
-                <hr />
                 <button
                   className="secondary"
                   onClick={() => void run(() => window.bro.stopHost())}
