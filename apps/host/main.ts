@@ -14,7 +14,9 @@ import {
   privateWrite,
 } from "../../packages/platform/paths";
 import { createHost } from "./server";
+import { inheritSystemProxy } from "../../packages/platform/proxy";
 
+await inheritSystemProxy();
 const root = dataRoot();
 prepareRoot(root);
 const lock = join(root, "host.lock");

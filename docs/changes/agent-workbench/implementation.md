@@ -29,7 +29,7 @@
 | 11 | 三个独立策略和 native Jev/Laya 客户端、预算/错误回退、比较日志；Skill 三态通过真实 OMP hook 测试 | 上下文/压缩长历史端到端、中文质量/费用评测 |
 | 12 | 本机 macOS arm64 应用包和 ZIP；包内 Bun/依赖启动、GUI→OMP→文件→关窗→重开通过；Windows 构建流程 | Windows 实机、正式签名公证、清洁机器和完整范围验收 |
 
-当前自动化检查：`bun run check`、`bun test tests`（21 个测试，75 次断言）、`bun run build`。
+当前自动化检查：`bun run check`、`bun test tests`（25 个测试，92 次断言）、`bun run build`。
 
 - `scripts/probe-omp.ts`：真实 OMP 工具写文件和进程退出后的权威历史恢复。
 - `scripts/probe-runtime.ts`：真实本地插件/MCP/Skill、独立会话交办及返回、插件禁用、Skill 旁路/实验/正常恢复。指定 `BRO_PROBE_BROWSER` 后，在独立 Chrome profile 中填表、点击并读回真实页面结果；本机已通过。
@@ -42,9 +42,11 @@
 
 2026-09-30 向量检索暂缓配置：`bun run check` 和 `bun run probe:memory` 通过。记忆探针不再自行设置 `noEmbeddings`，直接验证 bro 的文本检索基线；自动保存、新会话检索/注入、关闭后不注入均通过。证据目录为同一临时父目录下的 `bro-memory-probe-3CDLGW`；抽取模型仍未验收。
 
+2026-09-30 ChatGPT 登录修复：用户浏览器授权后的 token exchange 复现地区 403；不含凭据的无效令牌请求在默认网络下返回该 403，使用已有系统代理后返回预期的 401 `token_expired`。后台现于启动时继承 macOS 手动 HTTP/HTTPS 代理，保留显式环境配置和本机直连。类型检查、25 项测试（含实际 Bun 代理与回环直连）、本机重新打包和签名检查通过；更新后的应用已重启并在后台日志确认代理初始化，等待用户重新授权，尚不宣称真实账号登录通过。Windows 系统代理自动继承与 PAC/WPAD 待后续处理。
+
 双平台 CI：[运行 36578121307](https://github.com/Donmagelas/bro/actions/runs/36578121307) 在 `72b3d4e` 上成功完成 macOS 15、Windows 2025 的类型检查、21 项测试、OMP/runtime/controls/memory 四个真实运行探针及打包，两端 ZIP 均已上传。后续 `4130725` 的本机重新打包和 GUI 验收通过；[运行 36579225416](https://github.com/Donmagelas/bro/actions/runs/36579225416) 也已成功。Windows CI 不替代真实交互桌面、系统权限或账号验收。
 
-交付文件位于 `out/macos-arm64/bro.app` 和 `out/macos-arm64/bro-macos.zip`，不提交二进制与测试数据到 Git。按用户最新仓库约束直接提交并推送 `main`，不创建 PR。上述本机应用包为此前构建，不包含 2026-09-30 的向量检索暂缓配置。
+交付文件位于 `out/macos-arm64/bro.app` 和 `out/macos-arm64/bro-macos.zip`，不提交二进制与测试数据到 Git。按用户最新仓库约束直接提交并推送 `main`，不创建 PR。本机应用包已于 2026-09-30 更新，包含向量检索暂缓配置和 macOS 代理继承修复。
 
 具体输入需求、未完成实现与验证条件集中记录在 [待处理事项](open-issues.md)，不将这些必需项视为已完成。
 

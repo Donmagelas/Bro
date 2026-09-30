@@ -95,7 +95,13 @@ export class AccountAuth {
         this.changed();
       })
       .catch((e: unknown) => {
-        this.loginState = { status: "error", error: String(e) };
+        const error = String(e);
+        this.loginState = {
+          status: "error",
+          error: error.includes("unsupported_country_region_territory")
+            ? "ChatGPT 登录未完成：OpenAI 拒绝了后台请求的网络地区（403）。请检查系统代理和网络出口，调整后停止并重启 bro 后台，再重新登录。"
+            : error,
+        };
         this.changed();
       })
       .finally(() => {

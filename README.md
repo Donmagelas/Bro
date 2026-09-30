@@ -22,6 +22,8 @@ bun run start
 
 进入「设置与连接 → 模型」，选择 ChatGPT 登录，或填写 API Key、Base URL、模型 ID 与协议。运行中的会话可排队、steer、停止。普通聊天默认使用 bro 自己的数据目录，不会默认读取已有 pi/OMP/Codex 的会话和账号配置。
 
+macOS 后台启动时会继承系统手动 HTTP/HTTPS 代理；显式设置的代理环境变量优先，本机回调和 GUI 连接保持直连。修改系统代理后需在通用设置里“停止后台并退出”，再打开 bro。PAC/WPAD 和 Windows 系统代理自动继承尚未接入；可使用标准代理环境变量。浏览器完成授权不等于后台令牌交换成功，登录地区 403 会单独提示。
+
 若下载 Electron 失败，可执行 `node node_modules/electron/install.js`；网络环境需要时可自行设置 `ELECTRON_MIRROR`。开发启动时 Bun 应在 PATH 中，也可通过 `BRO_BUN_PATH` 指定它的完整路径。
 
 ## 当前能力
