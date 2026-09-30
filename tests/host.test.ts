@@ -106,6 +106,95 @@ test("a remote message body cannot impersonate a GUI source or choose another bi
   expect(host.store.inputs(s.id)[0]?.source.kind).toBe("feishu");
   expect(host.store.inputs(s.id)[0]?.status).toBe("queued");
 });
+
+test("Settings keep disabled Feishu visible without exposing or reusing another app's secret", async () => {
+  const host = setup();
+  host.store.setConfig("feishu", {
+    appId: "original-app",
+    appSecret: "private-feishu-secret",
+    botId: "original-bot",
+    enabled: false,
+  });
+  const state = (await req(host, "/state")).data;
+  expect(state.feishu).toMatchObject({
+    configured: true,
+    enabled: false,
+    appId: "original-app",
+    botId: "original-bot",
+  });
+  expect(JSON.stringify(state)).not.toContain("private-feishu-secret");
+  expect(
+    (
+      await req(host, "/feishu", {
+        appId: "original-app",
+        appSecret: "",
+        botId: "original-bot",
+        enabled: false,
+      })
+    ).status,
+  ).toBe(200);
+  expect(host.store.getConfig<any>("feishu", null).appSecret).toBe(
+    "private-feishu-secret",
+  );
+  expect(
+    (
+      await req(host, "/feishu", {
+        appId: "different-app",
+        appSecret: "",
+        enabled: false,
+      })
+    ).status,
+  ).toBe(400);
+  expect(host.store.getConfig<any>("feishu", null).appId).toBe("original-app");
+});
+
+test("Monitor edits a connection in place, preserves its token, and can stop it after its target is archived", async () => {
+  const host = setup();
+  const first = (await req(host, "/sessions", {})).data;
+  const second = (await req(host, "/sessions", {})).data;
+  const created = (
+    await req(host, "/subscriptions", {
+      name: "Peer",
+      kind: "peer",
+      url: "http://127.0.0.1:1",
+      me: "bro",
+      trustedSenders: ["owner"],
+      token: "private-relay-token",
+      enabled: false,
+      targetSessionId: first.id,
+    })
+  ).data;
+  host.store.setConfig(`cursor:${created.id}`, "42");
+  const edited = await req(host, "/subscriptions", {
+    ...created,
+    name: "本机 Peer",
+    targetSessionId: second.id,
+    token: "",
+  });
+  expect(edited.status).toBe(200);
+  expect(host.store.subscriptions()).toHaveLength(1);
+  expect(host.store.subscriptions()[0]).toMatchObject({
+    id: created.id,
+    name: "本机 Peer",
+    targetSessionId: second.id,
+  });
+  expect(host.store.getConfig(`monitorSecret:${created.id}`, "")).toBe(
+    "private-relay-token",
+  );
+  expect(host.store.getConfig(`cursor:${created.id}`, "")).toBe("42");
+  expect(JSON.stringify((await req(host, "/state")).data)).not.toContain(
+    "private-relay-token",
+  );
+  host.store.updateSession(second.id, { archived: true });
+  expect(
+    (await req(host, "/subscriptions", { ...edited.data, enabled: true }))
+      .status,
+  ).toBe(400);
+  expect(
+    (await req(host, "/subscriptions", { ...edited.data, enabled: false }))
+      .status,
+  ).toBe(200);
+});
 test("session creation and queued GUI input are idempotent and default to the configured directory", async () => {
   const host = setup();
   const s = (await req(host, "/sessions", {})).data;

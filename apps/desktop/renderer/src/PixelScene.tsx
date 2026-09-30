@@ -18,9 +18,9 @@ export const rooms: Record<
   },
   Monitor: {
     code: "03 / WATCH TOWER",
-    title: "让每一个事件，都有回应。",
+    title: "管理监听来源与目标会话。",
     icon: "radar",
-    color: "#bdcc9a",
+    color: "#e3bd83",
   },
   资源: {
     code: "04 / TOOL SHOP",

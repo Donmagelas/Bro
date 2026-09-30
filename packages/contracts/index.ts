@@ -179,6 +179,7 @@ export interface HostState {
   feishu: {
     configured: boolean;
     connected: boolean;
+    enabled?: boolean;
     appId?: string;
     botId?: string;
     error?: string;

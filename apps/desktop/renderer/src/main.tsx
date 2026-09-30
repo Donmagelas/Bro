@@ -22,6 +22,8 @@ import type {
 } from "../../../../packages/contracts";
 import "./style.css";
 import { ResourcePanel } from "./ResourcePanel";
+import { MonitorPanel } from "./MonitorPanel";
+import { FeishuPanel } from "./FeishuPanel";
 import { ExperimentPanel } from "./ExperimentPanel";
 import { useDrafts } from "./useDrafts";
 import {
@@ -1304,6 +1306,17 @@ function App() {
           close={() => setSettings(false)}
           run={run}
           selected={selected}
+          openSession={(id) => {
+            const target = state.sessions.find((s) => s.id === id);
+            if (!target) return;
+            navigationVersion.current++;
+            selectedRef.current = id;
+            setSelected(id);
+            setActiveProjectId(target.projectId);
+            setShowArchived(false);
+            setSearch("");
+            setSettings(false);
+          }}
         />
       )}
       {confirmation && (
@@ -1730,6 +1743,7 @@ function SettingsPanel({
   close,
   run: runGlobal,
   selected,
+  openSession,
 }: {
   state: HostState;
   tab: string;
@@ -1737,6 +1751,7 @@ function SettingsPanel({
   close: () => void;
   run: (fn: () => Promise<unknown>) => Promise<void>;
   selected: string | null;
+  openSession: (id: string) => void;
 }) {
   const [feedback, setFeedback] = useState<{
     error: boolean;
@@ -1796,26 +1811,6 @@ function SettingsPanel({
     reasoning: true,
   };
   const [connection, setConnection] = useState(emptyConnection);
-  const [feishu, setFeishu] = useState({
-    appId: state.feishu.appId || "",
-    appSecret: "",
-    botId: state.feishu.botId || "",
-  });
-  const [trusted, setTrusted] = useState(
-    state.settings.trustedFeishuUsers.join("\n"),
-  );
-  const [subscription, setSubscription] = useState({
-    name: "",
-    kind: "sse",
-    url: "",
-    path: "",
-    command: "",
-    me: "",
-    token: "",
-    trustedSenders: "",
-    targetSessionId: selected || "",
-    enabled: true,
-  });
   const [auth, setAuth] = useState<any>(null),
     [authAnswer, setAuthAnswer] = useState("");
   useEffect(() => {
@@ -2174,251 +2169,15 @@ function SettingsPanel({
               </>
             )}
             {tab === "飞书" && (
-              <>
-                <p className="description">
-                  私聊连接一个会话；群聊按成员分别续接，被可信成员 @ 时才回复。
-                </p>
-                <div className="status-row">
-                  <span
-                    className={`status-dot ${state.feishu.connected ? "idle" : "error"}`}
-                  />
-                  {state.feishu.connected ? "连接已启动" : "尚未连接"}
-                </div>
-                {state.feishu.error && (
-                  <div className="notice">{state.feishu.error}</div>
-                )}
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void run(() =>
-                      api("/feishu", "POST", { ...feishu, enabled: true }),
-                    );
-                  }}
-                >
-                  <Field
-                    label="App ID"
-                    value={feishu.appId}
-                    onChange={(v) => setFeishu((x) => ({ ...x, appId: v }))}
-                  />
-                  <Field
-                    label="App Secret"
-                    type="password"
-                    value={feishu.appSecret}
-                    onChange={(v) => setFeishu((x) => ({ ...x, appSecret: v }))}
-                  />
-                  <Field
-                    label="Bot open_id（可留空自动获取）"
-                    value={feishu.botId}
-                    onChange={(v) => setFeishu((x) => ({ ...x, botId: v }))}
-                  />
-                  <button className="primary">保存并连接</button>
-                </form>
-                <hr />
-                <h3>受信任的人</h3>
-                <p className="description">
-                  首次填写你自己的 open_id。每行一个；名单内均可完整使用 Bro。
-                </p>
-                <textarea
-                  className="settings-textarea"
-                  aria-label="受信任的飞书用户"
-                  value={trusted}
-                  onChange={(e) => setTrusted(e.target.value)}
-                  placeholder="ou_…"
-                />
-                <button
-                  className="secondary"
-                  onClick={() =>
-                    void run(() =>
-                      api("/settings", "PATCH", {
-                        trustedFeishuUsers: trusted
-                          .split(/\s+/)
-                          .filter(Boolean),
-                      }),
-                    )
-                  }
-                >
-                  保存名单
-                </button>
-              </>
+              <FeishuPanel state={state} run={run} openSession={openSession} />
             )}
             {tab === "Monitor" && (
-              <>
-                <h3>入口绑定</h3>
-                {!state.bindings.length && (
-                  <p className="empty-note">
-                    还没有入口绑定。连接消息来源后，它们会出现在这里。
-                  </p>
-                )}
-                {state.bindings.map((b) => (
-                  <label className="field" key={b.key}>
-                    {b.key}
-                    <select
-                      value={b.sessionId}
-                      onChange={(e) =>
-                        void run(() =>
-                          api("/bindings", "POST", {
-                            key: b.key,
-                            sessionId: e.target.value,
-                          }),
-                        )
-                      }
-                    >
-                      {state.sessions.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.title}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ))}
-                <p className="description">
-                  后台监听已配置的事件源，将新事件排入目标会话。无事件时不调用模型。
-                </p>
-                {state.subscriptions.map((s) => (
-                  <div className="connection-card" key={s.id}>
-                    <strong>{s.name}</strong>
-                    <span>
-                      {s.kind} · {s.enabled ? "已启用" : "已停用"}
-                    </span>
-                    {state.monitorErrors[s.id] && (
-                      <small className="danger">
-                        {state.monitorErrors[s.id]}
-                      </small>
-                    )}
-                    <button
-                      onClick={() =>
-                        void run(() =>
-                          api("/subscriptions", "POST", {
-                            ...s,
-                            enabled: !s.enabled,
-                          }),
-                        )
-                      }
-                    >
-                      {s.enabled ? "停用" : "启用"}
-                    </button>
-                  </div>
-                ))}
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void run(async () => {
-                      await api("/subscriptions", "POST", {
-                        ...subscription,
-                        command:
-                          subscription.kind === "process"
-                            ? JSON.parse(subscription.command)
-                            : undefined,
-                        trustedSenders: subscription.trustedSenders
-                          .split(/\s+/)
-                          .filter(Boolean),
-                      });
-                      setSubscription((s) => ({ ...s, name: "", token: "" }));
-                    });
-                  }}
-                >
-                  <Field
-                    label="订阅名称"
-                    value={subscription.name}
-                    onChange={(v) =>
-                      setSubscription((s) => ({ ...s, name: v }))
-                    }
-                  />
-                  <label className="field">
-                    来源
-                    <select
-                      value={subscription.kind}
-                      onChange={(e) =>
-                        setSubscription((s) => ({ ...s, kind: e.target.value }))
-                      }
-                    >
-                      <option value="sse">SSE 事件</option>
-                      <option value="peer">Peer Relay</option>
-                      <option value="file">文件变化</option>
-                      <option value="process">进程输出</option>
-                    </select>
-                  </label>
-                  {["sse", "peer"].includes(subscription.kind) ? (
-                    <Field
-                      label="SSE 地址"
-                      value={subscription.url}
-                      onChange={(v) =>
-                        setSubscription((s) => ({ ...s, url: v }))
-                      }
-                    />
-                  ) : subscription.kind === "file" ? (
-                    <Field
-                      label="文件路径"
-                      value={subscription.path}
-                      onChange={(v) =>
-                        setSubscription((s) => ({ ...s, path: v }))
-                      }
-                    />
-                  ) : (
-                    <Field
-                      label="命令参数数组"
-                      placeholder={'["程序", "参数"]'}
-                      value={subscription.command}
-                      onChange={(v) =>
-                        setSubscription((s) => ({ ...s, command: v }))
-                      }
-                    />
-                  )}
-                  {subscription.kind === "peer" && (
-                    <>
-                      <Field
-                        label="Bro 的 Peer 身份"
-                        value={subscription.me}
-                        onChange={(v) =>
-                          setSubscription((s) => ({ ...s, me: v }))
-                        }
-                      />
-                      <Field
-                        label="Relay Token"
-                        type="password"
-                        value={subscription.token}
-                        onChange={(v) =>
-                          setSubscription((s) => ({ ...s, token: v }))
-                        }
-                      />
-                      <Field
-                        label="受信任的 Peer（空格分隔）"
-                        value={subscription.trustedSenders}
-                        onChange={(v) =>
-                          setSubscription((s) => ({ ...s, trustedSenders: v }))
-                        }
-                      />
-                    </>
-                  )}
-                  <label className="field">
-                    目标会话
-                    <select
-                      value={subscription.targetSessionId}
-                      onChange={(e) =>
-                        setSubscription((s) => ({
-                          ...s,
-                          targetSessionId: e.target.value,
-                        }))
-                      }
-                    >
-                      <option value="">选择会话</option>
-                      {state.sessions.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.title}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <button
-                    className="primary"
-                    disabled={
-                      !subscription.name.trim() || !subscription.targetSessionId
-                    }
-                  >
-                    添加监听
-                  </button>
-                </form>
-              </>
+              <MonitorPanel
+                state={state}
+                run={run}
+                selected={selected}
+                openSession={openSession}
+              />
             )}
             {tab === "资源" && <ResourcePanel state={state} run={run} />}
             {tab === "记忆与实验" && (

@@ -81,27 +81,36 @@ export function createHost(
   runtimes.beforeStop = (id) => desktop.cancel(id);
   const oauth = new AccountAuth(store, changed);
   const resources = new Resources(store, () => runtimes.refresh());
-  const state = () => ({
-    version: VERSION,
-    sessions: store.sessions(),
-    archivedSessions: store.sessions(true).filter((s) => s.archived),
-    projects: store.projects(),
-    connections: store.connections(),
-    settings: store.getSettings(),
-    delegations: store.delegations(),
-    subscriptions: store.subscriptions(),
-    feishu: feishu.status,
-    desktop: desktop.state,
-    monitorErrors: Object.fromEntries(monitor.errors),
-    bindings: store.bindings(),
-    resources: resources.publicList(),
-    runtimeInfo: Object.fromEntries(
-      store
-        .sessions()
-        .map((s) => [s.id, store.getConfig(`runtimeInfo:${s.id}`, null)]),
-    ),
-    pendingRefresh: runtimes.pendingRefresh,
-  });
+  const state = () => {
+    const savedFeishu = store.getConfig<FeishuConfig | null>("feishu", null);
+    return {
+      version: VERSION,
+      sessions: store.sessions(),
+      archivedSessions: store.sessions(true).filter((s) => s.archived),
+      projects: store.projects(),
+      connections: store.connections(),
+      settings: store.getSettings(),
+      delegations: store.delegations(),
+      subscriptions: store.subscriptions(),
+      feishu: {
+        ...feishu.status,
+        configured: !!savedFeishu,
+        enabled: savedFeishu?.enabled === true,
+        appId: savedFeishu?.appId,
+        botId: savedFeishu?.botId,
+      },
+      desktop: desktop.state,
+      monitorErrors: Object.fromEntries(monitor.errors),
+      bindings: store.bindings(),
+      resources: resources.publicList(),
+      runtimeInfo: Object.fromEntries(
+        store
+          .sessions()
+          .map((s) => [s.id, store.getConfig(`runtimeInfo:${s.id}`, null)]),
+      ),
+      pendingRefresh: runtimes.pendingRefresh,
+    };
+  };
   const authorized = (request: Request) => {
     const supplied =
       request.headers.get("Authorization")?.replace(/^Bearer /, "") || "";
@@ -778,9 +787,12 @@ export function createHost(
         if (path === "/feishu" && method === "POST") {
           const b = await body(request);
           const previous = store.getConfig<FeishuConfig | null>("feishu", null);
+          const appId = str(b.appId, "App ID");
           const config: FeishuConfig = {
-            appId: str(b.appId, "App ID"),
-            appSecret: b.appSecret || previous?.appSecret || "",
+            appId,
+            appSecret:
+              b.appSecret ||
+              (previous?.appId === appId ? previous.appSecret : ""),
             botId: b.botId || undefined,
             enabled: b.enabled !== false,
           };
@@ -797,7 +809,19 @@ export function createHost(
             ["sse", "peer", "file", "process"],
             "来源类型",
           ) as Subscription["kind"];
-          if (!store.session(b.targetSessionId))
+          const previous = b.id
+            ? store.subscriptions().find((s) => s.id === b.id)
+            : undefined;
+          if (b.id && !previous) throw new Error("连接不存在，请重新添加");
+          const target = store.session(b.targetSessionId);
+          if (
+            (!target || target.archived) &&
+            !(
+              previous &&
+              !b.enabled &&
+              previous.targetSessionId === b.targetSessionId
+            )
+          )
             throw new Error("请选择目标会话");
           const s: Subscription = {
             id: b.id || randomUUID(),
