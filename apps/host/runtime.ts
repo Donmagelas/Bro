@@ -36,6 +36,7 @@ export class Runtimes {
   private locks = new WorkspaceLocks();
   private waiting = new Map<string, AbortController>();
   private aborted = new Set<string>();
+  private titling = new Set<string>();
   get pendingRefresh() {
     return [...this.stale];
   }
@@ -102,6 +103,7 @@ export class Runtimes {
           ...process.env,
           BRO_DATA_DIR: this.store.root,
           PI_CODING_AGENT_DIR: join(this.store.root, "agent"),
+          PI_NO_TITLE: "1", // Bro owns the first-message title and manual-rename guard.
         },
         stdout: "pipe",
         stderr: "pipe",
@@ -375,6 +377,28 @@ export class Runtimes {
     for (const s of this.store.sessions())
       if (s.queued && s.status !== "interrupted") this.wake(s.id);
   }
+  private startTitle(id: string, worker: Worker) {
+    const input = this.store.pendingTitle(id);
+    if (!input || this.titling.has(id)) return;
+    this.titling.add(id);
+    void this.track(
+      this.call(worker, "title", { text: input.text.slice(0, 6000) }, 35000)
+        .then((title) => {
+          if (
+            this.store.completeTitle(
+              id,
+              input.id,
+              typeof title === "string" ? title : null,
+            )
+          )
+            this.changed();
+        })
+        .catch(() => {
+          this.store.completeTitle(id, input.id, null);
+        })
+        .finally(() => this.titling.delete(id)),
+    );
+  }
   private async drain(id: string) {
     if (this.closing || this.running.has(id)) return;
     this.running.add(id);
@@ -390,6 +414,7 @@ export class Runtimes {
         await this.disposeWorker(id);
       }
       let worker = await this.worker(id);
+      this.startTitle(id, worker);
       while (!this.closing && (input = this.store.claim(id))) {
         this.aborted.delete(id);
         let unlock: (() => void) | undefined;

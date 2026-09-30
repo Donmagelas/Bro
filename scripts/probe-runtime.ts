@@ -198,8 +198,14 @@ try {
       args: [resolve("tests/fixtures/mcp.ts")],
     },
   });
-  const source = host.store.createSession({ connectionId: "fixture" }),
-    target = host.store.createSession({ connectionId: "fixture" });
+  const source = host.store.createSession({
+      title: "Runtime probe",
+      connectionId: "fixture",
+    }),
+    target = host.store.createSession({
+      title: "Runtime probe",
+      connectionId: "fixture",
+    });
   await send(source.id, "BRO_RESOURCE");
   const history = JSON.stringify(await host.runtimes.history(source.id));
   for (const proof of ["PLUGIN_EXECUTED", "MCP_EXECUTED", "BRO_SKILL_LOADED"])

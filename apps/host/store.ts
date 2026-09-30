@@ -17,6 +17,18 @@ import { splitText } from "../../packages/integrations/text";
 
 type Row = Record<string, any>;
 const parse = <T>(s: string): T => JSON.parse(s);
+const shortTitle = (text: string, limit: number) =>
+  Array.from(
+    new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(
+      text
+        .replace(/\p{Cc}/gu, " ")
+        .replace(/\s+/g, " ")
+        .trim(),
+    ),
+    (s) => s.segment,
+  )
+    .slice(0, limit)
+    .join("");
 export class Store {
   readonly db: Database;
   constructor(readonly root: string) {
@@ -228,26 +240,29 @@ export class Store {
     const settings = this.getSettings(),
       id = randomUUID(),
       now = Date.now();
-    this.db
-      .query(
-        "INSERT INTO sessions (id,title,cwd,projectId,connectionId,model,thinking,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        options.title || "新会话",
-        options.cwd || settings.defaultCwd,
-        options.projectId || null,
-        options.connectionId || settings.defaultConnectionId,
-        options.model !== undefined
-          ? options.model
-          : ((!options.connectionId ||
-            options.connectionId === settings.defaultConnectionId
-              ? settings.defaultModel
-              : null) ?? null),
-        options.thinking || settings.defaultThinking || "medium",
-        now,
-        now,
-      );
+    this.db.transaction(() => {
+      this.db
+        .query(
+          "INSERT INTO sessions (id,title,cwd,projectId,connectionId,model,thinking,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?,?)",
+        )
+        .run(
+          id,
+          options.title || "新会话",
+          options.cwd || settings.defaultCwd,
+          options.projectId || null,
+          options.connectionId || settings.defaultConnectionId,
+          options.model !== undefined
+            ? options.model
+            : ((!options.connectionId ||
+              options.connectionId === settings.defaultConnectionId
+                ? settings.defaultModel
+                : null) ?? null),
+          options.thinking || settings.defaultThinking || "medium",
+          now,
+          now,
+        );
+      if (!options.title) this.setConfig(`autoTitle:${id}`, { inputId: null });
+    })();
     return this.session(id)!;
   }
   updateSession(id: string, values: Partial<Session>) {
@@ -264,6 +279,8 @@ export class Store {
       "error",
     ] as const;
     this.db.transaction(() => {
+      if (values.title !== undefined)
+        this.db.query("DELETE FROM config WHERE key=?").run(`autoTitle:${id}`);
       for (const key of keys)
         if (values[key] !== undefined) {
           const value =
@@ -280,6 +297,7 @@ export class Store {
   }
   deleteSession(id: string) {
     this.db.transaction(() => {
+      this.db.query("DELETE FROM config WHERE key=?").run(`autoTitle:${id}`);
       this.db.query("DELETE FROM bindings WHERE sessionId=?").run(id);
       this.db.query("DELETE FROM inputs WHERE sessionId=?").run(id);
       this.db.query("DELETE FROM sessions WHERE id=?").run(id);
@@ -304,24 +322,60 @@ export class Store {
         throw new Error("重复请求标识与原请求不一致");
       return existing;
     }
-    this.db
-      .query(
-        "INSERT INTO inputs (id,sessionId,text,source,attachments,annotations,createdAt,parentRequestId) VALUES (?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        sessionId,
-        text,
-        JSON.stringify(source),
-        JSON.stringify(extra.attachments || []),
-        JSON.stringify(extra.annotations || []),
-        Date.now(),
-        extra.parentRequestId || null,
+    return this.db.transaction(() => {
+      const naming = this.getConfig<{ inputId: string | null } | null>(
+        `autoTitle:${sessionId}`,
+        null,
       );
-    this.db
-      .query("UPDATE sessions SET updatedAt=? WHERE id=?")
-      .run(Date.now(), sessionId);
-    return this.input(id)!;
+      const first =
+        naming &&
+        naming.inputId === null &&
+        this.inputs(sessionId).length === 0;
+      this.db
+        .query(
+          "INSERT INTO inputs (id,sessionId,text,source,attachments,annotations,createdAt,parentRequestId) VALUES (?,?,?,?,?,?,?,?)",
+        )
+        .run(
+          id,
+          sessionId,
+          text,
+          JSON.stringify(source),
+          JSON.stringify(extra.attachments || []),
+          JSON.stringify(extra.annotations || []),
+          Date.now(),
+          extra.parentRequestId || null,
+        );
+      this.db
+        .query("UPDATE sessions SET updatedAt=? WHERE id=?")
+        .run(Date.now(), sessionId);
+      if (first) {
+        this.db
+          .query("UPDATE sessions SET title=? WHERE id=?")
+          .run(shortTitle(text, 48) || "新会话", sessionId);
+        this.setConfig(`autoTitle:${sessionId}`, { inputId: id });
+      }
+      return this.input(id)!;
+    })();
+  }
+  pendingTitle(id: string): Input | null {
+    const request = this.getConfig<{ inputId: string | null } | null>(
+      `autoTitle:${id}`,
+      null,
+    );
+    return request?.inputId ? this.input(request.inputId) : null;
+  }
+  completeTitle(id: string, inputId: string, title: string | null): boolean {
+    return this.db.transaction(() => {
+      if (this.pendingTitle(id)?.id !== inputId || !this.session(id))
+        return false;
+      const normalized = title && shortTitle(title, 80);
+      if (normalized)
+        this.db
+          .query("UPDATE sessions SET title=? WHERE id=?")
+          .run(normalized, id);
+      this.db.query("DELETE FROM config WHERE key=?").run(`autoTitle:${id}`);
+      return !!normalized;
+    })();
   }
   private inputRow(r: Row): Input {
     return {

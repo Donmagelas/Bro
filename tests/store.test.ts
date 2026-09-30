@@ -246,3 +246,74 @@ test("project migration, archive and removal preserve conversations, files and m
   );
   expect(migrated.input(input.id)?.text).toBe("Keep this history");
 });
+
+test("first input gets a durable fallback title and the semantic title only applies once", () => {
+  let s = setup();
+  const session = s.createSession();
+  const text = "帮我修复登录后的跳转问题\n  然后检查首页";
+  const first = s.enqueue(
+    session.id,
+    text,
+    { kind: "gui" },
+    { id: "title-first" },
+  );
+  expect(s.session(session.id)?.title).toBe(
+    "帮我修复登录后的跳转问题 然后检查首页",
+  );
+  s.enqueue(session.id, text, { kind: "gui" }, { id: first.id });
+  s.enqueue(session.id, "顺便调整按钮", { kind: "gui" });
+  expect(s.pendingTitle(session.id)?.id).toBe(first.id);
+  const updatedAt = s.session(session.id)!.updatedAt;
+  s.close();
+  const reopened = new Store(s.root);
+  stores[stores.indexOf(s)] = reopened;
+  s = reopened;
+  expect(s.pendingTitle(session.id)?.text).toBe(text);
+  expect(s.completeTitle(session.id, "wrong-input", "错误标题")).toBe(false);
+  expect(s.completeTitle(session.id, first.id, " 修复登录跳转 ")).toBe(true);
+  expect(s.session(session.id)?.title).toBe("修复登录跳转");
+  expect(s.session(session.id)?.updatedAt).toBe(updatedAt);
+  expect(s.completeTitle(session.id, first.id, "重复结果")).toBe(false);
+  s.enqueue(session.id, "后续任务", { kind: "gui" });
+  expect(s.pendingTitle(session.id)).toBeNull();
+  expect(s.session(session.id)?.title).toBe("修复登录跳转");
+});
+
+test("manual rename wins even when it matches the current automatic or placeholder title", () => {
+  const s = setup();
+  const session = s.createSession();
+  const first = s.enqueue(session.id, "修复登录跳转", { kind: "gui" });
+  s.updateSession(session.id, { title: "修复登录跳转" });
+  expect(s.completeTitle(session.id, first.id, "后台生成的标题")).toBe(false);
+  expect(s.session(session.id)?.title).toBe("修复登录跳转");
+  for (const existing of [
+    s.createSession({ title: "新会话" }),
+    s.createSession(),
+  ]) {
+    s.updateSession(existing.id, { title: "新会话" });
+    s.enqueue(existing.id, "帮我自动修改文件", { kind: "gui" });
+    expect(s.pendingTitle(existing.id)).toBeNull();
+    expect(s.session(existing.id)?.title).toBe("新会话");
+  }
+  const legacy = s.createSession();
+  s.db.query("DELETE FROM config WHERE key=?").run(`autoTitle:${legacy.id}`);
+  s.enqueue(legacy.id, "旧会话继续聊", { kind: "gui" });
+  expect(s.session(legacy.id)?.title).toBe("新会话");
+});
+
+test("title failure keeps a grapheme-safe fallback and deletion ignores late results", () => {
+  const s = setup();
+  const emoji = "👨‍👩‍👧‍👦";
+  const session = s.createSession();
+  const first = s.enqueue(session.id, emoji.repeat(60), { kind: "gui" });
+  expect(s.session(session.id)?.title).toBe(emoji.repeat(48));
+  expect(s.completeTitle(session.id, first.id, "\n \t")).toBe(false);
+  expect(s.pendingTitle(session.id)).toBeNull();
+  expect(s.session(session.id)?.title).toBe(emoji.repeat(48));
+  const deleted = s.createSession();
+  const input = s.enqueue(deleted.id, "帮我重构路由模块", { kind: "gui" });
+  s.deleteSession(deleted.id);
+  expect(s.completeTitle(deleted.id, input.id, "重构路由模块")).toBe(false);
+  expect(s.session(deleted.id)).toBeNull();
+  expect(s.pendingTitle(deleted.id)).toBeNull();
+});

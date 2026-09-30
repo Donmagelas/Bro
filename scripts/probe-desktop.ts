@@ -16,7 +16,12 @@ const provider = Bun.serve({
     const text = JSON.stringify(messages[index]?.content);
     const hasTool = messages.slice(index).some((m) => m.role === "tool");
     if (text.includes("BRO_SLOW")) await Bun.sleep(3000);
-    const call = !hasTool && text.includes("BRO_GUI_WRITE");
+    const naming = messages.some(
+      (m) =>
+        ["system", "developer"].includes(m.role) &&
+        JSON.stringify(m.content).includes("<title>"),
+    );
+    const call = !naming && !hasTool && text.includes("BRO_GUI_WRITE");
     const delta = call
       ? {
           role: "assistant",
@@ -37,9 +42,11 @@ const provider = Bun.serve({
         }
       : {
           role: "assistant",
-          content: text.includes("BRO_SLOW")
-            ? "BACKGROUND_COMPLETE"
-            : "GUI_COMPLETE",
+          content: naming
+            ? "<title>桌面验证会话</title>"
+            : text.includes("BRO_SLOW")
+              ? "BACKGROUND_COMPLETE"
+              : "GUI_COMPLETE",
         };
     const frame = {
       id: "gui",

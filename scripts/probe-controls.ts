@@ -104,7 +104,10 @@ try {
     },
     "fixture",
   );
-  const session = host.store.createSession({ connectionId: "fixture" });
+  const session = host.store.createSession({
+    title: "Runtime probe",
+    connectionId: "fixture",
+  });
   const first = host.store.enqueue(session.id, "BRO_FIRST", { kind: "gui" });
   host.runtimes.wake(session.id);
   await until(() => seen.includes("FIRST"));
@@ -173,6 +176,7 @@ try {
       "fixture",
     );
   const switchSession = host.store.createSession({
+    title: "Model switch probe",
     connectionId: "model-a",
     thinking: "high",
   });

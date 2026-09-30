@@ -19,6 +19,7 @@ jobs:
       - run: bun run probe:omp
       - run: bun run probe:runtime
       - run: bun run probe:controls
+      - run: bun run probe:titles
       - run: bun run probe:memory
       - run: bun run package
       - uses: actions/upload-artifact@v4

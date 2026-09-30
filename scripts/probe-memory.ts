@@ -77,13 +77,13 @@ try {
     defaultConnectionId: "fixture",
     memory: true,
   });
-  const first = host.store.createSession();
+  const first = host.store.createSession({ title: "Memory probe" });
   await send(
     first.id,
     "Project BRO_CEDAR uses PORT_4517 for its local service. Keep this fact in the project notes.",
   );
   await host.runtimes.release(first.id);
-  const second = host.store.createSession();
+  const second = host.store.createSession({ title: "Memory probe" });
   await send(second.id, "BRO_CEDAR");
   const status = await host.runtimes.memory(second.id);
   const recalled = await host.runtimes.memory(second.id, "BRO_CEDAR PORT_4517");
@@ -105,7 +105,7 @@ try {
     memory: false,
   });
   await host.runtimes.refresh();
-  const third = host.store.createSession();
+  const third = host.store.createSession({ title: "Memory probe" });
   await send(third.id, "Say hello");
   if (lastContext.includes("PORT_4517") || lastContext.includes("BRO_CEDAR"))
     throw new Error("Memory remained in fresh context after off");

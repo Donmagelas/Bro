@@ -21,6 +21,7 @@
     "probe:runtime": "bun scripts/probe-runtime.ts",
     "probe:desktop": "bun run build && bun scripts/probe-desktop.ts",
     "probe:controls": "bun scripts/probe-controls.ts",
+    "probe:titles": "bun scripts/probe-titles.ts",
     "format": "prettier --write apps packages scripts tests package.json tsconfig.json vite.config.ts",
     "probe:memory": "bun scripts/probe-memory.ts"
   },

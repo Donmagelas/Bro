@@ -87,7 +87,10 @@ try {
     },
     "local-fixture-key",
   );
-  const s = host.store.createSession({ connectionId: "fixture" });
+  const s = host.store.createSession({
+    title: "Runtime probe",
+    connectionId: "fixture",
+  });
   const input = host.store.enqueue(
     s.id,
     "Write proof.txt with bro-omp-ok and report completion.",
