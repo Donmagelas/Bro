@@ -219,7 +219,31 @@ export class Feishu {
     );
     if (input) {
       this.changed();
+      // Start the receipt before waking the model; a slow reaction must not
+      // hold up the queued task. ingest() already deduplicates platform events.
+      const receipt = this.acknowledge(m.message_id);
       this.wake(input.sessionId);
+      await receipt;
+    }
+  }
+  private async acknowledge(messageId: string) {
+    if (!this.client) return;
+    try {
+      const response = await this.client.request<{ code?: number }>({
+        method: "POST",
+        url: `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reactions`,
+        data: { reaction_type: { emoji_type: "Get" } },
+        timeout: 5000,
+        signal: AbortSignal.timeout(5000),
+      });
+      if (response.code !== 0)
+        console.warn(
+          `[feishu] 收件表情发送失败 (${response.code ?? "unknown"})；任务继续执行`,
+        );
+    } catch {
+      // Receipt failure is not a task failure or a disconnected bot. Avoid
+      // logging the SDK error object, which may contain authentication headers.
+      console.warn("[feishu] 收件表情发送失败或超时；任务继续执行");
     }
   }
   async history(chatId: string, count = 30) {
