@@ -156,7 +156,7 @@ export class Desktop {
             );
           }
         } else if (method === "capture") {
-          result = await this.native.capture(args[0] || "screen", {
+          result = await this.native.capture(args[0] || "desktop", {
             maxWidth: 1280,
             maxHeight: 896,
           });

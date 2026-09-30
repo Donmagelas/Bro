@@ -2526,7 +2526,6 @@ function SettingsPanel({
                         ["鼠标与键盘", "input"],
                         ["界面控件读取", "ax"],
                         ["后台窗口输入", "backgroundWindowInput"],
-                        ["人工接管检测", "takeover"],
                       ] as const
                     ).map(([label, key]) => (
                       <div className="capability-row" key={key}>
@@ -2538,6 +2537,12 @@ function SettingsPanel({
                         </strong>
                       </div>
                     ))}
+                    <div className="capability-row">
+                      <span>人工接管检测</span>
+                      <strong>
+                        {state.desktop.detectorReady ? "可用" : "未就绪"}
+                      </strong>
+                    </div>
                     <details>
                       <summary>技术详情</summary>
                       <pre>

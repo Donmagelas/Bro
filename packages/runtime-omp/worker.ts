@@ -178,7 +178,7 @@ async function initialize(value: typeof config) {
     name: "bro_computer",
     label: "操作桌面",
     description:
-      "通过 OMP 原生桌面后端读取和操作应用。capabilities=true 检查权限；operations=[{method,args}] 执行连贯的一批动作。方法：listWindows/listDisplays/capture(target)/axSnapshot(target)/axQuery(target,query)/axNode(ref)/axChildren(ref)/axAttributes(ref)/axPerform(ref,action)/axSetValue(ref,value)/axFocus(ref)/axClick(ref,options)/click(target,x,y,options)/typeText(target,text,options)/keyChord(target,keys,options)/raiseWindow(windowId)。先读取状态定位窗口和控件；用户接管暂停后须等待 GUI 手动继续。",
+      "通过 OMP 原生桌面后端读取和操作应用。capabilities=true 检查权限；operations=[{method,args}] 按序执行一批动作，args 是位置参数数组。target 使用 listWindows 返回的原始窗口 id；全屏截图使用 desktop，不能使用 screen 或自行拼窗口前缀。方法：listWindows()/listDisplays()/capture(target)/axSnapshot(target)/axQuery(target,query)/axNode(ref)/axChildren(ref)/axAttributes(ref)/axPerform(ref,action)/axSetValue(ref,value)/axFocus(ref)/axClick(ref,options)/click(target,x,y,options)/typeText(target,text,options)/keyChord(target,keys,options)/raiseWindow(windowId)。ref 必须来自当前 AX 结果。axSnapshot 是定位摘要，会折叠换行或截断文本，不能据此重建或验证全文。修改已有文本前读取 axNode(ref).value 或 axAttributes(ref) 的 AXValue，保留未修改部分和换行；修改后重新读取完整值逐字核验。快捷键执行成功不代表已保存，应核对应用的保存状态。先读取状态定位窗口和控件；坐标点击前先 capture 同一 target，坐标使用截图像素。默认后台窗口输入，仅在后台输入不支持时用 options={takeover:true} 临时激活目标窗口；这不等于用户接管检测。detectorReady 才是 Bro 人工输入检测状态。用户接管暂停后须等待 GUI 手动继续。",
     loadMode: "essential",
     approval: "exec",
     parameters: Type.Object({

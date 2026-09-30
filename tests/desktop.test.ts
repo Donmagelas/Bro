@@ -35,3 +35,26 @@ test("human takeover blocks later operations in a batch and persists until manua
   await desktop.execute("two", [{ method: "click" }]);
   expect(calls.at(-1)).toBe("click");
 });
+
+test("capture uses the native desktop target and preserves explicit window ids", async () => {
+  const targets: string[] = [];
+  const desktop = new Desktop(
+    "/unused",
+    () => {},
+    async () => ({
+      capabilities: {},
+      async capture(target: string) {
+        targets.push(target);
+        return { data: new Uint8Array([1, 2]), width: 1, height: 1, target };
+      },
+    }),
+  );
+  desktop.state.enabled = true;
+  desktop.inputEvent({ type: "ready" });
+  const result = await desktop.execute("one", [
+    { method: "capture" },
+    { method: "capture", args: ["12345"] },
+  ]);
+  expect(targets).toEqual(["desktop", "12345"]);
+  expect(result.content.filter((c) => c.type === "image")).toHaveLength(2);
+});
