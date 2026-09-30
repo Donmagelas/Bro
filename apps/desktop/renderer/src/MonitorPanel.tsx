@@ -3,38 +3,44 @@ import type { HostState, Subscription } from "../../../../packages/contracts";
 import { PixelIcon } from "./PixelScene";
 
 type SourceKind = Subscription["kind"];
+type Category = Exclude<SourceKind, "peer">;
 const sources: {
-  kind: SourceKind;
+  kind: Category;
   label: string;
   description: string;
   icon: string;
 }[] = [
   {
-    kind: "peer",
-    label: "Peer",
-    description: "连接本机或远端的 Peer",
-    icon: "radar",
-  },
-  {
     kind: "file",
-    label: "文件变化",
+    label: "文件",
     description: "文件更新后交给 Bro 处理",
     icon: "box",
   },
   {
     kind: "process",
-    label: "进程输出",
+    label: "进程",
     description: "接收本机程序输出的事件",
     icon: "chip",
   },
   {
     kind: "sse",
-    label: "SSE 事件",
-    description: "接收自定义服务的事件",
+    label: "SSE",
+    description: "接收事件流或连接 Peer",
     icon: "radar",
   },
 ];
-const sourceOf = (kind: SourceKind) => sources.find((s) => s.kind === kind)!;
+const categoryOf = (kind: SourceKind): Category =>
+  kind === "peer" ? "sse" : kind;
+const sourceOf = (kind: SourceKind) =>
+  sources.find((s) => s.kind === categoryOf(kind))!;
+const protocolName = (kind: SourceKind) =>
+  kind === "peer" ? "Peer" : kind === "sse" ? "通用 SSE" : sourceOf(kind).label;
+const sourceAddress = (sub: Subscription) =>
+  sub.kind === "file"
+    ? sub.path
+    : sub.kind === "process"
+      ? JSON.stringify(sub.command)
+      : sub.url;
 const api = (path: string, body: unknown) =>
   window.bro.request(path, "POST", body);
 
@@ -64,9 +70,6 @@ export function MonitorPanel({
     enabled: true,
   });
   const sessions = state.sessions.filter((s) => !s.archived);
-  const available = sources.filter(
-    (source) => !state.subscriptions.some((s) => s.kind === source.kind),
-  );
   const update = (key: keyof typeof draft, value: string | boolean) =>
     setDraft((current) => ({ ...current, [key]: value }));
   const back = () => {
@@ -78,7 +81,7 @@ export function MonitorPanel({
     setChoosing(false);
     setDraft({
       id: sub?.id || "",
-      name: sub?.name || sourceOf(kind).label,
+      name: sub?.name || "",
       url: sub?.url || "",
       path: sub?.path || "",
       command: sub?.command ? JSON.stringify(sub.command) : "",
@@ -157,6 +160,24 @@ export function MonitorPanel({
           <section className="monitor-section">
             <h3>监听配置</h3>
             {field("名称", "name", { required: true })}
+            {categoryOf(editor) === "sse" && (
+              <label className="field">
+                协议
+                <select
+                  value={editor}
+                  disabled={!!draft.id}
+                  onChange={(e) => setEditor(e.target.value as "sse" | "peer")}
+                >
+                  <option value="sse">通用 SSE</option>
+                  <option value="peer">Peer</option>
+                </select>
+                {!!draft.id && (
+                  <small>
+                    更换协议请新建监听，避免混用消息进度和回复记录。
+                  </small>
+                )}
+              </label>
+            )}
             {(editor === "peer" || editor === "sse") &&
               field(editor === "peer" ? "Relay 地址" : "事件服务地址", "url", {
                 placeholder: "https://…",
@@ -175,12 +196,6 @@ export function MonitorPanel({
             {editor === "peer" && (
               <>
                 {field("Bro 的 Peer 身份", "me", { required: true })}
-                {field("Relay Token", "token", {
-                  type: "password",
-                  placeholder: draft.id
-                    ? "留空保留已保存的 Token"
-                    : "填写 Relay Token",
-                })}
                 <label className="field">
                   受信任的 Peer
                   <textarea
@@ -193,6 +208,17 @@ export function MonitorPanel({
                 </label>
               </>
             )}
+            {categoryOf(editor) === "sse" &&
+              field(
+                editor === "peer" ? "Relay Token" : "Bearer Token（可选）",
+                "token",
+                {
+                  type: "password",
+                  placeholder: draft.id
+                    ? "留空保留已保存的 Token"
+                    : "无需认证时留空",
+                },
+              )}
           </section>
           <section className="monitor-section">
             <h3>消息与会话</h3>
@@ -247,8 +273,8 @@ export function MonitorPanel({
   return (
     <div className="monitor-panel">
       <div className="monitor-toolbar">
-        <h3>监听来源</h3>
-        {!!available.length && !!state.subscriptions.length && (
+        <h3>监听列表</h3>
+        {!!state.subscriptions.length && (
           <button
             className="primary"
             type="button"
@@ -258,73 +284,11 @@ export function MonitorPanel({
           </button>
         )}
       </div>
-      {state.subscriptions.map((sub) => (
-        <article
-          className="monitor-connection"
-          key={sub.id}
-          aria-label={`${sub.name}监听`}
-        >
-          <div className="monitor-connection-header">
-            <div className="monitor-source-icon">
-              <PixelIcon kind={sourceOf(sub.kind).icon} />
-            </div>
-            <div className="monitor-connection-name">
-              <h3>{sub.name}</h3>
-              <span>{sourceOf(sub.kind).label}</span>
-            </div>
-            <span
-              className={`monitor-status ${!sub.enabled ? "off" : state.monitorErrors[sub.id] ? "error" : ""}`}
-            >
-              {!sub.enabled
-                ? "已停用"
-                : state.monitorErrors[sub.id]
-                  ? "监听异常"
-                  : "已启用"}
-            </span>
-          </div>
-          <p className="monitor-destination">
-            消息交给<span>{targetName(sub.targetSessionId)}</span>
-          </p>
-          {sub.enabled && state.monitorErrors[sub.id] && (
-            <p role="status" className="notice">
-              {state.monitorErrors[sub.id]}
-            </p>
-          )}
-          <div className="monitor-card-actions">
-            <button
-              className="secondary"
-              type="button"
-              onClick={() => edit(sub.kind, sub)}
-            >
-              管理监听
-            </button>
-            <button
-              className="secondary"
-              type="button"
-              disabled={!sessions.some((s) => s.id === sub.targetSessionId)}
-              onClick={() => openSession(sub.targetSessionId)}
-            >
-              打开会话
-            </button>
-            <button
-              className="secondary"
-              type="button"
-              onClick={() =>
-                void run(() =>
-                  api("/subscriptions", { ...sub, enabled: !sub.enabled }),
-                )
-              }
-            >
-              {sub.enabled ? "停用" : "启用"}
-            </button>
-          </div>
-        </article>
-      ))}
       {(choosing || !state.subscriptions.length) && (
-        <section className="monitor-source-picker" aria-label="添加监听来源">
-          <h3>选择监听来源</h3>
+        <section className="monitor-source-picker" aria-label="添加监听">
+          <h3>选择监听类别</h3>
           <div>
-            {available.map((source) => (
+            {sources.map((source) => (
               <button
                 type="button"
                 key={source.kind}
@@ -338,6 +302,109 @@ export function MonitorPanel({
           </div>
         </section>
       )}
+      {sources.map((source) => {
+        const subscriptions = state.subscriptions.filter(
+          (sub) => categoryOf(sub.kind) === source.kind,
+        );
+        if (!subscriptions.length) return null;
+        return (
+          <section
+            className="monitor-category"
+            key={source.kind}
+            aria-label={`${source.label}监听`}
+          >
+            <div className="monitor-toolbar">
+              <h3>
+                {source.label}
+                <span className="monitor-category-count">
+                  {subscriptions.length}
+                </span>
+              </h3>
+              <button
+                className="secondary"
+                type="button"
+                onClick={() => edit(source.kind)}
+                aria-label={`添加${source.label}监听`}
+              >
+                ＋ 添加监听
+              </button>
+            </div>
+            {subscriptions.map((sub) => (
+              <article
+                className="monitor-connection"
+                key={sub.id}
+                aria-label={`${sub.name}监听`}
+              >
+                <div className="monitor-connection-header">
+                  <div className="monitor-source-icon">
+                    <PixelIcon kind={sourceOf(sub.kind).icon} />
+                  </div>
+                  <div className="monitor-connection-name">
+                    <h3>{sub.name}</h3>
+                    <span>
+                      {protocolName(sub.kind)}
+                      {sub.kind === "peer" ? ` · ${sub.me}` : ""}
+                    </span>
+                  </div>
+                  <span
+                    className={`monitor-status ${!sub.enabled ? "off" : state.monitorErrors[sub.id] ? "error" : ""}`}
+                  >
+                    {!sub.enabled
+                      ? "已停用"
+                      : state.monitorErrors[sub.id]
+                        ? "监听异常"
+                        : "已启用"}
+                  </span>
+                </div>
+                <div className="monitor-address" title={sourceAddress(sub)}>
+                  {sourceAddress(sub)}
+                </div>
+                <p className="monitor-destination">
+                  消息交给<span>{targetName(sub.targetSessionId)}</span>
+                </p>
+                {sub.enabled && state.monitorErrors[sub.id] && (
+                  <p role="status" className="notice">
+                    {state.monitorErrors[sub.id]}
+                  </p>
+                )}
+                <div className="monitor-card-actions">
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={() => edit(sub.kind, sub)}
+                  >
+                    管理监听
+                  </button>
+                  <button
+                    className="secondary"
+                    type="button"
+                    disabled={
+                      !sessions.some((s) => s.id === sub.targetSessionId)
+                    }
+                    onClick={() => openSession(sub.targetSessionId)}
+                  >
+                    打开会话
+                  </button>
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={() =>
+                      void run(() =>
+                        api("/subscriptions", {
+                          ...sub,
+                          enabled: !sub.enabled,
+                        }),
+                      )
+                    }
+                  >
+                    {sub.enabled ? "停用" : "启用"}
+                  </button>
+                </div>
+              </article>
+            ))}
+          </section>
+        );
+      })}
     </div>
   );
 }

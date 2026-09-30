@@ -1294,6 +1294,21 @@ svg {
 .monitor-editor-title h3 {
   margin: 0;
 }
+.monitor-category {
+  margin-top: 28px;
+}
+.monitor-category-count {
+  margin-left: 10px;
+  color: #896b4c;
+  font-weight: 400;
+}
+.monitor-address {
+  margin-top: 14px;
+  font-size: 12px;
+  color: #715336;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
 .monitor-connection {
   padding: 20px;
   margin: 0 0 16px;
