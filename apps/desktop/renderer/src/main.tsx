@@ -422,7 +422,6 @@ function App() {
             <img src={brandIcon} alt="" />
           </span>
           <strong>Bro</strong>
-          <span className="local-label">本机</span>
         </div>
         <button
           className="nav-button"

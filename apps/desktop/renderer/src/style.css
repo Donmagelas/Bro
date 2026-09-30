@@ -144,13 +144,6 @@ svg {
   object-fit: contain;
   image-rendering: pixelated;
 }
-.local-label {
-  margin-left: auto;
-  font-size: 9px;
-  color: #dbba87;
-  border: 1px solid #786043;
-  padding: 3px 5px;
-}
 .nav-button {
   width: 100%;
   justify-content: flex-start;
@@ -1249,9 +1242,6 @@ svg {
   }
   .brand strong {
     font-size: 26px;
-  }
-  .local-label {
-    display: none;
   }
   .welcome {
     padding: 15px 28px;
