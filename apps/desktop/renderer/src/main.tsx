@@ -571,9 +571,11 @@ function App() {
           <div className="top-actions">
             {session && (
               <>
-                <span className={`status-chip ${session.status}`}>
-                  {session.archived ? "已归档" : labels[session.status]}
-                </span>
+                {(session.archived || session.status !== "idle") && (
+                  <span className={`status-chip ${session.status}`}>
+                    {session.archived ? "已归档" : labels[session.status]}
+                  </span>
+                )}
                 <button
                   className="icon-button"
                   aria-label="会话操作"
