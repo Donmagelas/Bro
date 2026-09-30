@@ -21,22 +21,32 @@
 | 03 | SQLite 队列、单会话独立进程、跨会话进程；实测 queue/steer/stop、关窗执行、重开历史 | 空闲回收、完整崩溃矩阵、长期运行与升级 |
 | 04 | 原生 OMP 写文件、读取、JS、工具结果；文本批注从 GUI 进入实际请求；基础 diff | 完整项目修复案例、Python/LSP/DAP、更多产物 |
 | 05 | GUI 资源设置；原生 PluginManager 本地安装、Skill 扫描和 MCP 连接；真实调用及禁用通过 | Git 更新、复杂扩展配置、动态 MCP 与完整卸载验收 |
-| 06 | 飞书官方 SDK、可信入口、群成员绑定、引用附件；Peer 真实协议适配、SSE/文件/stdout；分段与投递核对 | 飞书/Peer 实际账号与收发、完整文件流和断线测试 |
+| 06 | 飞书官方 SDK、可信入口、群成员绑定、引用附件；新应用一键创建、本人配对、真实私聊收发及同一会话续接已通过；Peer 真实协议适配、SSE/文件/stdout | 飞书群 @、完整文件流和断线测试；Peer 真实账号 |
 | 07 | 真实两个 OMP 进程交办；目标写文件；结果排回来源，原始关联数据库测试通过 | IM 多个并发请求的真实异步回包 |
-| 08 | 原生 Desktop 后端、批次锁、分段输入检查、双平台监听器；macOS Swift 编译；独立无头 Chrome 填表/点击/读回通过 | 当前 AX/input/input-monitor 权限不足；真人接管、Windows 和共享浏览器未验收 |
-| 09 | bro 原生工具可作为外部应用操作入口；没有修改 Codex 的内部状态文件 | Codex 真实目标会话收发及专用关联流程尚未完成 |
+| 08 | 原生 Desktop 后端、批次锁、分段输入检查、双平台监听器；macOS 三项授权就绪，截图、AX 完整值读写和保存通过；真实 Codex 窗口坐标点击及分段中文输入通过；实际键鼠触发暂停、GUI 手动继续通过 | 长文本/更多控件、跨会话桌面争用、Windows 和共享浏览器完整验收 |
+| 09 | 飞书→Bro→原生桌面新建 Codex 会话→发送→读取真实回复→飞书关联回包已通过；未修改 Codex 内部状态文件 | 指定已有会话、长任务/排队和专用关联流程尚未完成 |
 | 10 | Mnemopi 独立数据库与开关；FTS 配置下实际自动 retain、新会话 recall/注入、off 不注入通过；状态/搜索入口；首版固定使用文本检索 | smol 抽取、管理和并发验收；默认向量检索已暂缓 |
 | 11 | 三个独立策略和 native Jev/Laya 客户端、预算/错误回退、比较日志；Skill 三态通过真实 OMP hook 测试 | 上下文/压缩长历史端到端、中文质量/费用评测 |
 | 12 | 本机 macOS arm64 应用包和 ZIP；包内 Bun/依赖启动、GUI→OMP→文件→关窗→重开通过；Windows 构建流程 | Windows 实机、正式签名公证、清洁机器和完整范围验收 |
 
-当前自动化检查：`bun run check`、`bun test tests`（42 个测试，255 次断言）、`bun run build`。
+当前自动化检查：`bun run check`、`bun test tests`（43 个测试，257 次断言）、`bun run build`。提交 `b3ea263` 的 [CI 36687639069](https://github.com/Donmagelas/Bro/actions/runs/36687639069) 已通过 macOS 与 Windows 的检查、探针和打包；不替代 Windows 交互桌面验收。
+
+2026-09-30 飞书真实验收：用户删除手工创建的旧应用后，使用官方 `lark-cli config init --new --name Bro --lang zh` 创建独立 Bro 配置，保留原 CLI 默认应用。新应用自动配置并发布；密钥通过开发者页面直接填入 Bro，未写入仓库。短时停止 Bro 长连接后，CLI 只读事件监听收到了用户指定的私聊配对口令，取得该新应用下的本人 open_id；关闭临时监听、保存可信名单并恢复 Bro 连接。
+
+- 私聊发送 `BRO_FEISHU_OK_0930` 验收指令，经真实 ChatGPT / GPT-6-Luna 回复，飞书原消息下收到对应回包。OMP 历史、来源 message ID、平台 reply_to 和界面一致。
+- 第二条消息复用同一 Bro 会话，实际调用 `bash` 执行 `sw_vers`、`uname -m`、`date` 和 `pwd`，结果在飞书原消息下返回。独立核对系统版本、架构、时间和默认工作目录一致，末尾标记 `BRO_LOCAL_OK_0930`。
+- 第三条由用户在飞书发送，Bro 仅调用 `bro_computer`，通过 Codex 新对话入口创建独立测试会话、输入中文指令并点击发送，读取实际回答后回复原飞书消息。Codex 侧新会话 `01a0f175-73b6-7fe0-b77a-ae63f7fec0a7` 的只读历史核对到准确请求及 `BRO_CODEX_OK_0930` 回答，且没有工具调用；飞书 `reply_to` 对应第三条请求。未改动任何 Codex 数据库或历史来制造结果。
+- Codex 的 AX 按钮动作曾返回但界面无变化，网页编辑框 AX 写值也明确报错；Bro 核对截图后改用同一窗口截图坐标点击及 `typeText`，成功输入和发送。测试未要求前台 takeover。记录这一兼容性回退，不将 AX 调用返回当成界面已完成。
+- 此记录覆盖本人私聊、本机只读查询和新建 Codex 会话；不把长连接状态或 CLI 配对成功当成完整任务通过。指定已有 Codex 会话、群 @、附件、断线与其他成员场景仍需验收。
+
+可重复运行的探针：
 
 - `scripts/probe-omp.ts`：真实 OMP 工具写文件和进程退出后的权威历史恢复。
 - `scripts/probe-runtime.ts`：真实本地插件/MCP/Skill、独立会话交办及返回、插件禁用、Skill 旁路/实验/正常恢复。指定 `BRO_PROBE_BROWSER` 后，在独立 Chrome profile 中填表、点击并读回真实页面结果；本机已通过。
 - `scripts/probe-controls.ts`：真实 provider 请求顺序 `FIRST → STEER → SECOND`；steer 批注进入历史；stop 中断请求且持久状态为 cancelled。手动压缩期间新输入仍排队，运行中关闭宿主会收拢执行进程；OMP 上下文统计可读。
 - `scripts/probe-memory.ts`：实际 OMP + Mnemopi 自动保存、跨新会话检索和注入、关闭后新会话不注入。此探针沿用 bro 原生 FTS-only 基线，只为确定性验证设置 `llmMode=none` 和每轮保存；默认向量检索已暂缓，smol 抽取模型尚未验收。
 - `scripts/probe-desktop.ts`：从 GUI 填写 API、实际写入中文空格文件名、提交批注、执行期间关窗、后台完成、重开恢复；草稿在重启后保留且按会话隔离。源码启动和 `.app` 启动均已通过；最终 `.app` 验证将工作目录移到应用内、PATH 限制为系统目录，并清除 Bun/开发页面覆盖，实际使用包内 Bun。
-- macOS 原生探针结果：Quartz、capture=true/granted、input=false/denied、AX=false/denied；Swift 监听器成功编译，预检返回“需要在系统设置中授予输入监控权限”。没有绕过权限，也未将此项标为通过。
+- macOS 原生探针（2026-09-30 更新）：Quartz、capture/input/AX 均为 true/granted，人工输入监控 detectorReady=true。真实 ChatGPT 会话修改 TextEdit 临时文档并保存，独立核对完整文本及换行一致；人工接管暂停/手动继续已通过。早期权限不足的结果已被本轮实测替代，完整桌面覆盖范围见待处理事项。
 
 2026-09-29 本机证据目录：`/var/folders/yq/71gby3lj03d7ndwm99jbdd240000gn/T/bro-runtime-probe-ya4sqG`、`bro-controls-fLTwaG`、`bro-memory-probe-RZElUb`、`bro-desktop-probe-Djnc85`（同一临时父目录）。源码探针和测试是可重复的证据入口；临时目录可能被系统清理。
 

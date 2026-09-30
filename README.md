@@ -2,7 +2,7 @@
 
 面向 macOS 和 Windows 的个人 Agent 工作台：一个 Bro，多个会话。桌面布局参考 Codex；飞书、Peer 和本机事件通过独立后台进入会话队列。
 
-目前是 **0.1 开发版**。macOS Apple Silicon 的应用包、GUI 配置、真实 OMP 工具执行、跨会话交办和关窗后的后台运行已验证；用户已实测 ChatGPT 登录及真实对话通过。账号刷新、自定义 API、真实模型完整开发任务、飞书收发、原生桌面权限、Mnemopi 和 Windows 尚有验收缺口，详见 [实施进度](docs/changes/agent-workbench/implementation.md) 和 [待处理事项](docs/changes/agent-workbench/open-issues.md)。
+目前是 **0.1 开发版**。macOS Apple Silicon 的应用包、GUI 配置、真实 OMP 工具执行、跨会话交办和关窗后的后台运行已验证；ChatGPT 登录与对话、macOS 截图/控件读写/保存、飞书私聊收发、通过飞书查询本机，以及 Bro 在 Codex 新建会话并读回回答均已实测。群聊、指定已有 Codex 会话、账号刷新、完整开发任务及 Windows 交互桌面等仍有验收缺口，详见 [实施进度](docs/changes/agent-workbench/implementation.md) 和 [待处理事项](docs/changes/agent-workbench/open-issues.md)。
 
 ## 运行
 
@@ -51,6 +51,8 @@ GUI 显示模型返回的 token 用量和 OMP 上下文估算。自定义 API �
 
 飞书需要启用 Bot、长连接事件 `im.message.receive_v1` 和消息/附件权限；首先把自己的 `ou_…` 加入可信名单。群里只有实际 @ Bot 的可信成员才触发任务，同一群的不同成员有独立会话。会话归档/删除解除绑定，下次有效消息重新创建。
 
+已有官方 `lark-cli` 时，可运行 `lark-cli config init --new --name Bro --lang zh`，通过官方网页确认创建应用，再将该应用的 App ID/Secret 填入 Bro。2026-09-30 使用 CLI 1.0.95 验证此流程能够自动配置并发布应用；浏览器已有登录态时不需要重复扫码。不要同时运行该应用的 CLI 事件监听和 Bro 长连接；临时监听用于识别本人 open_id 时，完成后应先停止，再连接 Bro。不同应用的 open_id 不通用，不能沿用旧机器人的名单。
+
 Peer 的身份、Token、可信发送者和目标会话必须显式配置；不会自动启用已有 Peer 账号。Jev/Laya 设置填写服务根地址，客户端追加 `/v1/systemone`。Laya 可使用 `multilingual` 模型；本项目不自动安装其模型权重。
 
 ## 构建与验证
@@ -70,7 +72,7 @@ bun run package
 
 在 macOS 打包会生成 `out/macos-arm64/Bro.app` 与 ZIP，包含 Bun、生产依赖和预编译输入监听器，使用本地 ad-hoc 签名。Windows 原生打包脚本生成 `out/windows-x64/Bro/Bro.exe` 和 ZIP；当前未在 Windows 实机完成验收。构建流程见 `.github/workflows/check.yml`。可通过 `BRO_NPM_REGISTRY` 为打包时的依赖安装指定镜像。
 
-macOS 需要辅助功能/输入监控权限才能启用原生桌面操作；当前能力探针与待补验收记录在实施文档中。应用包尚未进行 Apple 公证或正式 Windows 代码签名。
+macOS 原生桌面操作需要屏幕录制、辅助功能和输入监控权限；当前能力探针与待补验收记录在实施文档中。本地 ad-hoc 重签可能使已有授权失效，正式升级需要稳定签名身份；应用包尚未进行 Apple 公证或正式 Windows 代码签名。
 
 ## 范围与资料
 
@@ -80,4 +82,4 @@ macOS 需要辅助功能/输入监控权限才能启用原生桌面操作；当�
 - [实施步骤、进度与证据](docs/changes/agent-workbench/implementation.md)
 - [需要后续处理的事项](docs/changes/agent-workbench/open-issues.md)
 
-本轮实现保存在 `codex/initial-desktop` 工作分支；遵循本轮提供的协作约束，不创建或合并 PR，也不将功能变更直接合入 main。
+本仓库按用户要求直接提交并推送 `main`，不自动创建或合并 PR。
