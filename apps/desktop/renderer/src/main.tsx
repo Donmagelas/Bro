@@ -164,8 +164,16 @@ function App() {
   const [outgoing, setOutgoing] = useState<{
     id: string;
     sessionId: string | null;
+    draftKey: string | null;
     text: string;
   } | null>(null);
+  const visibleOutgoing =
+    outgoing &&
+    (outgoing.sessionId
+      ? outgoing.sessionId === selected
+      : !selected && outgoing.draftKey === draftKey);
+  const navigationVersion = useRef(0);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const sendLock = useRef(false);
   const followBottom = useRef(true);
   const statsSequence = useRef(0);
@@ -299,15 +307,25 @@ function App() {
       setError(errorText(e));
     }
   };
-  const newSession = async (
-    projectId = state?.projects.find(
-      (p) => p.id === activeProjectId && !p.archived,
-    )?.id,
-  ) => {
+  const startNewSession = (projectId: string | null = null) => {
+    navigationVersion.current++;
+    selectedRef.current = null;
+    setSelected(null);
+    setActiveProjectId(projectId);
+    setShowArchived(false);
+    setSearch("");
+    setError("");
+    setMenu(false);
+    setMode("queue");
+    composerRef.current?.focus();
+  };
+  const createSession = async (projectId: string | null, version: number) => {
     const s = await api("/sessions", "POST", { projectId });
-    selectedRef.current = s.id;
-    setSelected(s.id);
-    setActiveProjectId(projectId || null);
+    if (version === navigationVersion.current) {
+      selectedRef.current = s.id;
+      setSelected(s.id);
+      setActiveProjectId(projectId);
+    }
     setState(
       (current) =>
         current && {
@@ -315,8 +333,6 @@ function App() {
           sessions: [s, ...current.sessions.filter((item) => item.id !== s.id)],
         },
     );
-    setShowArchived(false);
-    setSearch("");
     void refresh();
     return s.id as string;
   };
@@ -335,11 +351,17 @@ function App() {
     followBottom.current = true;
     const snapshot = { text: draft, attachments, annotations };
     const inputId = crypto.randomUUID();
+    const version = navigationVersion.current;
     let id = selected;
-    setOutgoing({ id: inputId, sessionId: id, text: snapshot.text });
+    setOutgoing({ id: inputId, sessionId: id, draftKey, text: snapshot.text });
     try {
-      if (!id) id = await newSession();
-      setOutgoing({ id: inputId, sessionId: id, text: snapshot.text });
+      if (!id) id = await createSession(activeProjectId, version);
+      setOutgoing({
+        id: inputId,
+        sessionId: id,
+        draftKey,
+        text: snapshot.text,
+      });
       const input = await api(`/sessions/${id}/messages`, "POST", {
         id: inputId,
         ...snapshot,
@@ -365,7 +387,7 @@ function App() {
       if (event.isComposing) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
-        void run(() => newSession());
+        startNewSession();
       }
       if (event.key === "Escape") {
         setQuestion(null);
@@ -505,13 +527,6 @@ function App() {
           </span>
           <strong>Bro</strong>
         </div>
-        <button
-          className="nav-button"
-          onClick={() => void run(() => newSession())}
-        >
-          <Icon name="plus" />
-          新会话<span className="keyhint">⌘ / Ctrl N</span>
-        </button>
         <label className="search">
           <Icon name="search" size={16} />
           <input
@@ -535,11 +550,12 @@ function App() {
             setSearch("");
           }}
           onSelect={(s) => {
+            navigationVersion.current++;
             selectedRef.current = s.id;
             setSelected(s.id);
             setActiveProjectId(s.projectId);
           }}
-          onNew={(id) => void run(() => newSession(id))}
+          onNew={startNewSession}
           onAdd={() =>
             void run(async () => {
               const path = await window.bro.directory();
@@ -659,7 +675,7 @@ function App() {
           {!messages.length &&
             !inputs.length &&
             !live &&
-            !outgoing &&
+            !visibleOutgoing &&
             !loadingHistory && (
               <section className="welcome">
                 <div className="welcome-art">
@@ -696,7 +712,7 @@ function App() {
               </section>
             )}
           <div className="messages" aria-live="polite">
-            {loadingHistory && !outgoing && !inputs.length && (
+            {loadingHistory && !visibleOutgoing && !inputs.length && (
               <div className="loading-history">
                 <span className="spinner" />
                 正在读取会话…
@@ -824,7 +840,7 @@ function App() {
                 {tool}
               </div>
             )}
-            {outgoing?.sessionId === selected && (
+            {visibleOutgoing && outgoing && (
               <article className="message user sending">
                 <div className="message-author">你 · 发送中</div>
                 <div className="plain-message">{outgoing.text}</div>
@@ -911,6 +927,7 @@ function App() {
               </div>
             )}
             <textarea
+              ref={composerRef}
               aria-label="消息"
               placeholder="交给 Bro 一件事…"
               value={draft}
@@ -1203,7 +1220,7 @@ function SidebarTree({
   archived: boolean;
   onArchiveView: () => void;
   onSelect: (session: Session) => void;
-  onNew: (projectId?: string) => void;
+  onNew: (projectId: string | null) => void;
   onAdd: () => void;
   onSessionAction: (session: Session, action: string) => void;
   onProjectAction: (project: Project, action: string) => void;
@@ -1428,9 +1445,20 @@ function SidebarTree({
             </section>
           );
         })}
-        {!!ungrouped.length && (
+        {(!archived || !!ungrouped.length) && (
           <section aria-label="其他会话">
-            <div className="section-label">其他会话</div>
+            <div className="section-label">
+              其他会话
+              {!archived && (
+                <button
+                  aria-label="在项目外新建会话"
+                  title="新会话（⌘ / Ctrl N）"
+                  onClick={() => onNew(null)}
+                >
+                  <Icon name="plus" size={15} />
+                </button>
+              )}
+            </div>
             {ungrouped.map(sessionRow)}
           </section>
         )}

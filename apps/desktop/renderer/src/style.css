@@ -150,25 +150,6 @@ svg {
   padding: 12px 10px;
   font-size: 12px;
 }
-.sidebar > .nav-button {
-  background: var(--lime);
-  color: var(--ink);
-  border: 2px solid #2e231b;
-  box-shadow: 3px 3px #2e231b;
-  font-weight: 650;
-  margin: 0 0 16px;
-}
-.sidebar > .nav-button:hover {
-  background: #f2d4a2;
-  transform: translate(-1px, -1px);
-}
-.keyhint {
-  margin-left: auto;
-  font-size: 9px;
-  font-family: ui-monospace, monospace;
-  font-weight: 400;
-  opacity: 0.55;
-}
 .search {
   display: flex;
   align-items: center;
@@ -201,9 +182,6 @@ svg {
 }
 .sidebar button:hover {
   background: #5b4531;
-}
-.sidebar > .nav-button:hover {
-  background: #f2d4a2;
 }
 .project {
   display: flex;
