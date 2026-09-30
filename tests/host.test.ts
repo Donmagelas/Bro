@@ -1,8 +1,9 @@
-import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHost } from "../apps/host/server";
+import { AccountAuth } from "../apps/host/auth";
 import { Runtimes } from "../apps/host/runtime";
 import { prepareRoot } from "../packages/platform/paths";
 
@@ -234,6 +235,62 @@ test("ChatGPT model choices belong to each session and new-session defaults pers
   expect(reopened.session(first.id)?.thinking).toBe(b.thinkingLevels[0]);
   expect(reopened.getSettings().defaultModel).toBe(a.id);
   reopened.db.close();
+  const authDb = join(host.store.root, "agent", "agent.db");
+  expect(existsSync(`${authDb}-wal`)).toBe(true);
+  await host.close();
+  // SQLite can retain WAL sidecars after a clean close. Windows removal is the
+  // regression check for still-open files; do not hide EBUSY behind retries.
+  rmSync(join(host.store.root, "agent"), { recursive: true });
+  expect(existsSync(authDb)).toBe(false);
+}, 30000);
+
+test("auth shutdown drains initialization and cannot reopen the database", async () => {
+  const host = setup();
+  const auth = new AccountAuth(host.store, () => {});
+  const reading = auth.status().catch((error) => error);
+  await Promise.all([auth.close(), auth.close()]);
+  expect((await reading).message).toBe("认证服务已关闭");
+  const db = join(host.store.root, "agent", "agent.db");
+  expect(existsSync(db)).toBe(true);
+  rmSync(join(host.store.root, "agent"), { recursive: true });
+  await expect(auth.status()).rejects.toThrow("认证服务已关闭");
+  await expect(auth.start()).rejects.toThrow("认证服务已关闭");
+}, 30000);
+
+test("auth shutdown cancels login and waits for it before releasing storage", async () => {
+  const host = setup();
+  const auth = new AccountAuth(host.store, () => {});
+  await auth.status();
+  const db = join(host.store.root, "agent", "agent.db");
+  let signal!: AbortSignal;
+  let finish!: () => void;
+  // Keep the real SQLite storage; only replace the external OAuth exchange.
+  const login = spyOn((auth as any).storage.oauth, "login").mockImplementation(
+    (_provider: string, controller: { signal: AbortSignal }) => {
+      signal = controller.signal;
+      return new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    },
+  );
+  const close = spyOn((auth as any).storage, "close");
+  try {
+    await auth.start();
+    const closing = auth.close();
+    expect(signal.aborted).toBe(true);
+    expect(existsSync(`${db}-wal`)).toBe(true);
+    expect(close).not.toHaveBeenCalled();
+    finish();
+    await closing;
+    await auth.close();
+    expect(close).toHaveBeenCalledTimes(1);
+    rmSync(join(host.store.root, "agent"), { recursive: true });
+  } finally {
+    finish?.();
+    await auth.close();
+    login.mockRestore();
+    close.mockRestore();
+  }
 }, 30000);
 
 test("project lifecycle endpoints keep session history and the local directory intact", async () => {

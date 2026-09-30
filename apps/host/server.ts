@@ -885,7 +885,7 @@ export function createHost(
     async close() {
       if (closing) return;
       closing = true;
-      oauth.cancel();
+      await oauth.close();
       await monitor.stop();
       await feishu.stop();
       await runtimes.shutdown();
