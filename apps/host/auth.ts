@@ -1,6 +1,11 @@
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Store } from "./store";
+import type {
+  Connection,
+  ModelChoice,
+  Thinking,
+} from "../../packages/contracts";
 
 export class AccountAuth {
   private storage: any;
@@ -58,8 +63,38 @@ export class AccountAuth {
           maxTokens: m.maxTokens,
           reasoning: m.reasoning,
           imageInput: m.input?.includes("image"),
+          thinkingLevels: (m.reasoning ? m.thinking?.efforts : null) || [],
+          defaultThinking: m.thinking?.defaultLevel,
         })),
     };
+  }
+  async models(connection: Connection): Promise<ModelChoice[]> {
+    if (connection.kind === "api")
+      return [
+        {
+          connectionId: connection.id,
+          id: connection.model,
+          name: connection.model,
+          thinkingLevels: connection.reasoning
+            ? ["off", "minimal", "low", "medium", "high", "xhigh"]
+            : [],
+          defaultThinking: connection.reasoning ? "medium" : "off",
+        },
+      ];
+    const { models } = await this.status();
+    return models.map((model: any) => {
+      const thinkingLevels = model.thinkingLevels as Thinking[];
+      return {
+        connectionId: connection.id,
+        id: model.id,
+        name: model.name || model.id,
+        thinkingLevels,
+        defaultThinking:
+          model.defaultThinking ||
+          (thinkingLevels.includes("medium") ? "medium" : thinkingLevels[0]) ||
+          "off",
+      };
+    });
   }
   async start() {
     await this.init();

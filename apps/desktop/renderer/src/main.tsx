@@ -8,7 +8,9 @@ import type {
   ChatMessage,
   HostState,
   Input,
+  ModelChoice,
   Session,
+  Thinking,
 } from "../../../../packages/contracts";
 import "./style.css";
 import { ResourcePanel } from "./ResourcePanel";
@@ -31,6 +33,15 @@ declare global {
   }
 }
 const brandIcon = new URL("../../assets/icon.png", import.meta.url).href;
+const thinkingLabels: Record<Thinking, string> = {
+  off: "不思考",
+  minimal: "极低",
+  low: "低",
+  medium: "中",
+  high: "高",
+  xhigh: "超高",
+  max: "最高",
+};
 const api = (path: string, method = "GET", body?: unknown) =>
   window.bro.request(path, method, body);
 const labels: Record<string, string> = {
@@ -113,6 +124,8 @@ function textOf(message: ChatMessage): string {
     .join("\n");
 }
 function App() {
+  const [models, setModels] = useState<ModelChoice[]>([]);
+  const [savingModel, setSavingModel] = useState(false);
   const [state, setState] = useState<HostState | null>(null),
     [selected, setSelected] = useState<string | null>(null),
     [messages, setMessages] = useState<ChatMessage[]>([]),
@@ -158,15 +171,27 @@ function App() {
   const selectedRef = useRef(selected),
     bottom = useRef<HTMLDivElement>(null);
   selectedRef.current = selected;
+  const connectionsKey = JSON.stringify(state?.connections || []);
+  useEffect(() => {
+    let active = true;
+    void api("/models")
+      .then((models) => {
+        if (active) setModels(models);
+      })
+      .catch((error) => {
+        if (active) setError(`模型列表加载失败：${errorText(error)}`);
+      });
+    return () => {
+      active = false;
+    };
+  }, [connectionsKey]);
   const refresh = useCallback(async () => {
     try {
       const seq = ++stateSequence.current;
       const result = await api("/state");
       if (seq === stateSequence.current) {
         setState(result);
-        setError((current) =>
-          current === "后台连接正在恢复…" ? "" : current,
-        );
+        setError((current) => (current === "后台连接正在恢复…" ? "" : current));
       }
     } catch (e) {
       setError(String(e));
@@ -278,7 +303,8 @@ function App() {
     return s.id as string;
   };
   async function send() {
-    if (!draft.trim() || sendLock.current || session?.archived) return;
+    if (!draft.trim() || sendLock.current || savingModel || session?.archived)
+      return;
     if (!(session?.connectionId || state?.settings.defaultConnectionId)) {
       setSettingsTab("模型");
       setSettings(true);
@@ -335,6 +361,40 @@ function App() {
   });
   const patch = (values: unknown) =>
     run(() => api(`/sessions/${selected}`, "PATCH", values));
+  const activeConnection = state?.connections.find(
+    (c) =>
+      c.id === (session?.connectionId || state?.settings.defaultConnectionId),
+  );
+  const activeModelId = session
+    ? session.model || activeConnection?.model
+    : state?.settings.defaultModel || activeConnection?.model;
+  const activeModel = models.find(
+    (m) => m.connectionId === activeConnection?.id && m.id === activeModelId,
+  );
+  const selectedThinking = (session?.thinking ||
+    state?.settings.defaultThinking ||
+    "medium") as Thinking;
+  const changeModel = async (selection: {
+    connectionId?: string;
+    model?: string;
+    thinking?: Thinking;
+  }) => {
+    setSavingModel(true);
+    const sessionId = selected;
+    try {
+      await run(() =>
+        sessionId
+          ? api(`/sessions/${sessionId}`, "PATCH", selection)
+          : api("/settings", "PATCH", {
+              defaultConnectionId: selection.connectionId,
+              defaultModel: selection.model,
+              defaultThinking: selection.thinking,
+            }),
+      );
+    } finally {
+      setSavingModel(false);
+    }
+  };
   function annotate(message: ChatMessage) {
     const selection = window.getSelection();
     const quote = selection?.toString().trim();
@@ -361,9 +421,7 @@ function App() {
           <span className="brand-mark">
             <img src={brandIcon} alt="" />
           </span>
-          <strong>
-            Bro<span className="brand-sub">YOUR TRUSTY SIDEKICK</span>
-          </strong>
+          <strong>Bro</strong>
           <span className="local-label">本机</span>
         </div>
         <button
@@ -829,10 +887,6 @@ function App() {
                 ))}
               </div>
             )}
-            <div className="composer-caption">
-              <span>SEND A DISPATCH</span>
-              <span>● LOCAL</span>
-            </div>
             <textarea
               aria-label="消息"
               placeholder="交给 Bro 一件事…"
@@ -865,40 +919,62 @@ function App() {
                   <Icon name="clip" />
                 </button>
                 <select
-                  aria-label="模型连接"
+                  aria-label="模型"
+                  disabled={savingModel || !models.length}
                   value={
-                    session?.connectionId ||
-                    state?.settings.defaultConnectionId ||
-                    ""
+                    activeConnection && activeModelId
+                      ? JSON.stringify([activeConnection.id, activeModelId])
+                      : ""
                   }
-                  onChange={(e) =>
-                    selected
-                      ? void patch({ connectionId: e.target.value })
-                      : void run(() =>
-                          api("/settings", "PATCH", {
-                            defaultConnectionId: e.target.value,
-                          }),
-                        )
-                  }
+                  onChange={(e) => {
+                    const [connectionId, model] = JSON.parse(e.target.value);
+                    void changeModel({ connectionId, model });
+                  }}
                 >
                   <option value="" disabled>
                     选择模型
                   </option>
-                  {state?.connections.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} · {c.model}
+                  {!activeModel && activeConnection && activeModelId && (
+                    <option
+                      value={JSON.stringify([
+                        activeConnection.id,
+                        activeModelId,
+                      ])}
+                    >
+                      {activeModelId}
                     </option>
+                  )}
+                  {state?.connections.map((connection) => (
+                    <optgroup key={connection.id} label={connection.name}>
+                      {models
+                        .filter((model) => model.connectionId === connection.id)
+                        .map((model) => (
+                          <option
+                            key={model.id}
+                            value={JSON.stringify([connection.id, model.id])}
+                          >
+                            {model.name}
+                          </option>
+                        ))}
+                    </optgroup>
                   ))}
                 </select>
-                {session && (
+                {!!activeModel?.thinkingLevels.length && (
                   <select
-                    aria-label="推理强度"
-                    value={session.thinking}
-                    onChange={(e) => void patch({ thinking: e.target.value })}
+                    aria-label="思考强度"
+                    disabled={savingModel}
+                    value={
+                      activeModel.thinkingLevels.includes(selectedThinking)
+                        ? selectedThinking
+                        : activeModel.defaultThinking
+                    }
+                    onChange={(e) =>
+                      void changeModel({ thinking: e.target.value as Thinking })
+                    }
                   >
-                    {["off", "low", "medium", "high", "xhigh"].map((v) => (
+                    {activeModel.thinkingLevels.map((v) => (
                       <option key={v} value={v}>
-                        {v}
+                        思考：{thinkingLabels[v]}
                       </option>
                     ))}
                   </select>
@@ -911,7 +987,7 @@ function App() {
                   onChange={(e) => setMode(e.target.value as typeof mode)}
                 >
                   <option value="queue">排队发送</option>
-                  <option value="steer">Steer</option>
+                  <option value="steer">补充说明</option>
                 </select>
                 {["starting", "running", "waiting"].includes(
                   session?.status || "",
@@ -931,13 +1007,20 @@ function App() {
                 <button
                   className="send-button"
                   aria-label="发送"
-                  disabled={!draft.trim() || busy || session?.archived}
+                  disabled={
+                    !draft.trim() || busy || savingModel || session?.archived
+                  }
                   onClick={() => void send()}
                 >
                   <Icon name="send" size={18} />
                 </button>
               </div>
             </div>
+            {selected && state?.pendingRefresh.includes(selected) && (
+              <div className="description" role="status">
+                新配置将在下一轮生效。
+              </div>
+            )}
           </div>
           <div className="composer-footer">
             <span>
@@ -1214,7 +1297,11 @@ function SettingsPanel({
                 {state.connections.map((c) => (
                   <div className="connection-card" key={c.id}>
                     <strong>{c.name}</strong>
-                    <span>{c.model}</span>
+                    <span>
+                      {c.kind === "chatgpt"
+                        ? "在对话中切换模型与思考强度"
+                        : c.model}
+                    </span>
                     <small>
                       {c.kind === "chatgpt" ? "ChatGPT 账号" : c.baseUrl}
                     </small>
@@ -1362,33 +1449,26 @@ function SettingsPanel({
                       onChange={(v) => update("name", v)}
                       placeholder="ChatGPT"
                     />
-                    <label className="field">
-                      模型
-                      <select
-                        value={connection.model}
-                        onChange={(e) => update("model", e.target.value)}
-                      >
-                        <option value="">选择模型</option>
-                        {auth?.models?.map((m: any) => (
-                          <option key={m.id} value={m.id}>
-                            {m.name || m.id}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                    <p className="description">
+                      保存账号后，在对话输入框旁选择模型和思考强度。
+                    </p>
                     <button
                       className="primary"
-                      disabled={!auth?.accounts?.length || !connection.model}
+                      disabled={
+                        !auth?.accounts?.length || !auth?.models?.length
+                      }
                       onClick={() =>
                         void run(async () => {
+                          const initialModel =
+                            auth.models.find(
+                              (m: any) => m.id === connection.model,
+                            ) || auth.models[0];
                           const saved = await api("/connections", "POST", {
                             ...connection,
-                            ...auth.models.find(
-                              (m: any) => m.id === connection.model,
-                            ),
+                            ...initialModel,
                             id: editingConnection || undefined,
                             name: connection.name || "ChatGPT",
-                            model: connection.model,
+                            model: initialModel.id,
                             apiKey: undefined,
                           });
                           setEditingConnection(saved.id);

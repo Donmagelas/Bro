@@ -161,3 +161,77 @@ test("editing a connection preserves an omitted key and deleting it unlinks affe
   expect(host.store.session(session.id)?.connectionId).toBeNull();
   expect(host.store.getSettings().defaultConnectionId).toBeNull();
 });
+
+test("ChatGPT model choices belong to each session and new-session defaults persist", async () => {
+  const host = setup();
+  host.store.saveConnection({
+    id: "account",
+    name: "ChatGPT",
+    kind: "chatgpt",
+    provider: "openai-codex",
+    model: "legacy-model",
+    contextWindow: 128000,
+    maxTokens: 16000,
+    reasoning: true,
+    imageInput: true,
+  });
+  const choices = (await req(host, "/models")).data;
+  const reasoning = choices.filter((m: any) =>
+    m.thinkingLevels.includes("high"),
+  );
+  expect(reasoning.length).toBeGreaterThan(1);
+  const [a, b] = reasoning;
+  const defaults = await req(
+    host,
+    "/settings",
+    {
+      defaultConnectionId: "account",
+      defaultModel: a.id,
+      defaultThinking: "high",
+    },
+    "PATCH",
+  );
+  expect(defaults.status).toBe(200);
+  const first = (await req(host, "/sessions", {})).data;
+  const second = (await req(host, "/sessions", {})).data;
+  expect(first.model).toBe(a.id);
+  expect(first.thinking).toBe("high");
+  const switched = await req(
+    host,
+    `/sessions/${first.id}`,
+    { model: b.id, thinking: b.thinkingLevels[0] },
+    "PATCH",
+  );
+  expect(switched.status).toBe(200);
+  expect(host.store.session(first.id)?.model).toBe(b.id);
+  expect(host.store.session(second.id)?.model).toBe(a.id);
+  expect(host.store.getSettings().defaultModel).toBe(a.id);
+  expect(host.store.connection("account")?.model).toBe("legacy-model");
+  expect(
+    (
+      await req(
+        host,
+        `/sessions/${first.id}`,
+        { model: "nonexistent-model" },
+        "PATCH",
+      )
+    ).status,
+  ).toBe(400);
+  expect(
+    (
+      await req(
+        host,
+        `/sessions/${first.id}`,
+        { thinking: "impossible" },
+        "PATCH",
+      )
+    ).status,
+  ).toBe(400);
+  expect(host.store.session(first.id)?.model).toBe(b.id);
+  const { Store } = await import("../apps/host/store");
+  const reopened = new Store(host.store.root);
+  expect(reopened.session(first.id)?.model).toBe(b.id);
+  expect(reopened.session(first.id)?.thinking).toBe(b.thinkingLevels[0]);
+  expect(reopened.getSettings().defaultModel).toBe(a.id);
+  reopened.db.close();
+}, 30000);

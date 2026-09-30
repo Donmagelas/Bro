@@ -164,3 +164,33 @@ test("memory persists across personal sessions and replacement group bindings wi
   expect(store.memoryScope(other.sessionId)).not.toBe(firstScope);
   expect(firstScope).not.toBe(store.memoryScope(a.id));
 });
+
+test("legacy sessions gain a model column without losing history or inheriting a later default", () => {
+  const s = setup();
+  const original = s.createSession({
+    title: "Existing session",
+    connectionId: "account",
+    thinking: "high",
+  });
+  s.enqueue(original.id, "Preserved message", { kind: "gui" });
+  s.db.exec("ALTER TABLE sessions DROP COLUMN model");
+  const upgraded = new Store(s.root);
+  try {
+    const session = upgraded.session(original.id)!;
+    expect(session.title).toBe("Existing session");
+    expect(session.connectionId).toBe("account");
+    expect(session.thinking).toBe("high");
+    expect(session.model).toBeNull();
+    expect(upgraded.inputs(original.id)[0]?.text).toBe("Preserved message");
+    upgraded.setConfig("settings", {
+      ...upgraded.getSettings(),
+      defaultConnectionId: "account",
+      defaultModel: "new-default",
+    });
+    const fork = upgraded.createSession({ ...session });
+    expect(fork.model).toBeNull();
+    expect(upgraded.createSession().model).toBe("new-default");
+  } finally {
+    upgraded.close();
+  }
+});

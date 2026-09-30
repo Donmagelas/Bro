@@ -28,6 +28,7 @@ import {
   type Subscription,
   type Input,
   type Settings,
+  type Thinking,
 } from "../../packages/contracts";
 
 const json = (data: unknown, status = 200) =>
@@ -212,6 +213,47 @@ export function createHost(
       imageInput: !!data.imageInput,
     };
   }
+  async function modelSelection(
+    update: {
+      connectionId?: string;
+      model?: string | null;
+      thinking?: Thinking;
+    },
+    previous: {
+      connectionId: string | null;
+      model?: string | null;
+      thinking: Thinking;
+    },
+  ) {
+    const connectionId = update.connectionId ?? previous.connectionId;
+    if (!connectionId) {
+      if (update.model || update.thinking) throw new Error("请先选择模型连接");
+      return { connectionId: null, model: null, thinking: previous.thinking };
+    }
+    const connection = store.connection(connectionId);
+    if (!connection) throw new Error("连接不存在");
+    const modelId =
+      update.model ||
+      (connectionId === previous.connectionId ? previous.model : null) ||
+      connection.model;
+    const model = (await oauth.models(connection)).find(
+      (m) => m.id === modelId,
+    );
+    if (!model) throw new Error(`模型不可用：${modelId}。请重新选择模型。`);
+    const levels = model.thinkingLevels.length ? model.thinkingLevels : ["off"];
+    if (update.thinking !== undefined && !levels.includes(update.thinking))
+      throw new Error("该模型不支持所选思考强度");
+    const thinking =
+      update.thinking ??
+      (levels.includes(previous.thinking)
+        ? previous.thinking
+        : model.defaultThinking);
+    return {
+      connectionId,
+      model: connection.kind === "chatgpt" ? model.id : null,
+      thinking,
+    };
+  }
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: options.port ?? 0,
@@ -228,6 +270,12 @@ export function createHost(
         if (path === "/state" && method === "GET") return json(state());
         if (path === "/auth/status" && method === "GET")
           return json(await oauth.status());
+        if (path === "/models" && method === "GET")
+          return json(
+            (
+              await Promise.all(store.connections().map((c) => oauth.models(c)))
+            ).flat(),
+          );
         if (path === "/auth/login" && method === "POST")
           return json(await oauth.start());
         if (path === "/auth/answer" && method === "POST") {
@@ -304,11 +352,17 @@ export function createHost(
             ? store.projects().find((p) => p.id === b.projectId)
             : undefined;
           if (b.projectId && !project) throw new Error("项目不存在");
+          const defaults = store.getSettings();
+          const selection = await modelSelection(b, {
+            connectionId: defaults.defaultConnectionId,
+            model: defaults.defaultModel,
+            thinking: defaults.defaultThinking || "medium",
+          });
           const result = store.createSession({
             title: b.title,
             cwd: project?.path,
             projectId: project?.id,
-            connectionId: b.connectionId,
+            ...selection,
           });
           changed();
           return json(result);
@@ -325,20 +379,22 @@ export function createHost(
             if (b.title !== undefined) update.title = str(b.title, "标题", 200);
             if (b.pinned !== undefined) update.pinned = !!b.pinned;
             if (b.archived !== undefined) update.archived = !!b.archived;
-            if (b.thinking !== undefined)
-              update.thinking = allowed(
-                b.thinking,
-                ["off", "minimal", "low", "medium", "high", "xhigh"],
-                "推理强度",
+            if (
+              b.connectionId !== undefined ||
+              b.model !== undefined ||
+              b.thinking !== undefined
+            ) {
+              Object.assign(
+                update,
+                await modelSelection(b, {
+                  ...session,
+                  connectionId:
+                    session.connectionId ||
+                    store.getSettings().defaultConnectionId,
+                }),
               );
-            if (b.connectionId !== undefined) {
-              if (!store.connection(b.connectionId))
-                throw new Error("连接不存在");
-              update.connectionId = b.connectionId;
-            }
-            if (b.connectionId !== undefined || b.thinking !== undefined)
-              await runtimes.release(id, () => store.updateSession(id, update));
-            else store.updateSession(id, update);
+              runtimes.configure(id, update);
+            } else store.updateSession(id, update);
             changed();
             return json(store.session(id));
           }
@@ -546,10 +602,26 @@ export function createHost(
             settings = store.getSettings();
           if (b.defaultCwd !== undefined)
             settings.defaultCwd = ensurePath(str(b.defaultCwd, "默认工作目录"));
-          if (b.defaultConnectionId !== undefined) {
-            if (!store.connection(b.defaultConnectionId))
-              throw new Error("连接不存在");
-            settings.defaultConnectionId = b.defaultConnectionId;
+          if (
+            b.defaultConnectionId !== undefined ||
+            b.defaultModel !== undefined ||
+            b.defaultThinking !== undefined
+          ) {
+            const selection = await modelSelection(
+              {
+                connectionId: b.defaultConnectionId,
+                model: b.defaultModel,
+                thinking: b.defaultThinking,
+              },
+              {
+                connectionId: settings.defaultConnectionId,
+                model: settings.defaultModel,
+                thinking: settings.defaultThinking || "medium",
+              },
+            );
+            settings.defaultConnectionId = selection.connectionId;
+            settings.defaultModel = selection.model;
+            settings.defaultThinking = selection.thinking;
           }
           if (b.trustedFeishuUsers !== undefined) {
             if (

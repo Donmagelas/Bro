@@ -41,6 +41,9 @@ export class Store {
         status TEXT NOT NULL DEFAULT 'pending', error TEXT, createdAt INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS subscriptions (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       PRAGMA user_version=1;`);
+    const columns = this.db.query("PRAGMA table_info(sessions)").all() as Row[];
+    if (!columns.some((column) => column.name === "model"))
+      this.db.exec("ALTER TABLE sessions ADD COLUMN model TEXT");
   }
   getSettings(): Settings {
     return this.getConfig("settings", {
@@ -145,11 +148,14 @@ export class Store {
     this.db.transaction(() => {
       this.db.query("DELETE FROM connections WHERE id=?").run(id);
       this.db
-        .query("UPDATE sessions SET connectionId=NULL WHERE connectionId=?")
+        .query(
+          "UPDATE sessions SET connectionId=NULL, model=NULL WHERE connectionId=?",
+        )
         .run(id);
       const settings = this.getSettings();
       if (settings.defaultConnectionId === id) {
         settings.defaultConnectionId = null;
+        settings.defaultModel = null;
         this.setConfig("settings", settings);
       }
     })();
@@ -175,7 +181,7 @@ export class Store {
       now = Date.now();
     this.db
       .query(
-        "INSERT INTO sessions (id,title,cwd,projectId,connectionId,thinking,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?)",
+        "INSERT INTO sessions (id,title,cwd,projectId,connectionId,model,thinking,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?,?)",
       )
       .run(
         id,
@@ -183,7 +189,13 @@ export class Store {
         options.cwd || settings.defaultCwd,
         options.projectId || null,
         options.connectionId || settings.defaultConnectionId,
-        options.thinking || "medium",
+        options.model !== undefined
+          ? options.model
+          : ((!options.connectionId ||
+            options.connectionId === settings.defaultConnectionId
+              ? settings.defaultModel
+              : null) ?? null),
+        options.thinking || settings.defaultThinking || "medium",
         now,
         now,
       );
@@ -194,6 +206,7 @@ export class Store {
     const keys = [
       "title",
       "connectionId",
+      "model",
       "thinking",
       "archived",
       "pinned",

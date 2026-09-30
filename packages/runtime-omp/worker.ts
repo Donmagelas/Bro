@@ -108,6 +108,7 @@ async function initialize(value: typeof config) {
     join(agentDir, "models.yml"),
   );
   const c = value.connection;
+  const selectedModel = value.session.model || c.model;
   let model: any;
   if (c.kind === "api") {
     await registry.refresh("offline");
@@ -135,8 +136,11 @@ async function initialize(value: typeof config) {
     await registry.refresh();
     model = registry
       .getAll()
-      .find((m: any) => m.provider === "openai-codex" && m.id === c.model);
-    if (!model) throw new Error(`账号模型不可用：${c.model}。请重新选择模型。`);
+      .find(
+        (m: any) => m.provider === "openai-codex" && m.id === selectedModel,
+      );
+    if (!model)
+      throw new Error(`账号模型不可用：${selectedModel}。请重新选择模型。`);
   }
   const sessionDir = join(value.root, "sessions", value.session.id);
   mkdirSync(sessionDir, { recursive: true });

@@ -12,11 +12,14 @@ writeFileSync(
 let compacting = false,
   compactionRequest = false;
 const seen: string[] = [];
+const requests: { model: string; effort?: string }[] = [];
+let finishSwitch: (() => void) | undefined;
 const provider = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
   async fetch(req) {
     const body = (await req.json()) as any;
+    requests.push({ model: body.model, effort: body.reasoning_effort });
     const last = body.messages.findLast((m: any) => m.role === "user");
     const text =
       typeof last.content === "string"
@@ -31,6 +34,10 @@ const provider = Bun.serve({
         text.includes(`BRO_${x}`),
       ) || "UNKNOWN";
     seen.push(marker);
+    if (text.includes("BRO_MODEL_SWITCH_FIRST"))
+      await new Promise<void>((resolve) => {
+        finishSwitch = resolve;
+      });
     if (marker === "FIRST") await Bun.sleep(700);
     if (marker === "CANCEL" || marker === "SHUTDOWN")
       await new Promise<void>((resolve) => {
@@ -150,6 +157,86 @@ try {
   const stats = await host.runtimes.stats(session.id);
   if (!stats.context?.tokens)
     throw new Error("Native context usage unavailable");
+  const config = host.store.connection("fixture")!;
+  for (const [id, model] of [
+    ["model-a", "gpt-5.4"],
+    ["model-b", "gpt-5.3-codex"],
+  ])
+    host.store.saveConnection(
+      {
+        ...config,
+        id: id!,
+        provider: `bro-${id}`,
+        model: model!,
+        reasoning: true,
+      },
+      "fixture",
+    );
+  const switchSession = host.store.createSession({
+    connectionId: "model-a",
+    thinking: "high",
+  });
+  const requestIndex = requests.length;
+  const beforeSwitch = host.store.enqueue(
+    switchSession.id,
+    "BRO_MODEL_SWITCH_FIRST",
+    { kind: "gui" },
+  );
+  host.runtimes.wake(switchSession.id);
+  await until(() => !!finishSwitch);
+  const changed = await fetch(
+    `http://127.0.0.1:${host.server.port}/sessions/${switchSession.id}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: "Bearer probe",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ connectionId: "model-b", thinking: "low" }),
+    },
+  );
+  if (!changed.ok)
+    throw new Error(`Active model switch failed: ${await changed.text()}`);
+  if (host.store.input(beforeSwitch.id)?.status !== "running")
+    throw new Error("Model switch interrupted the active turn");
+  const afterSwitch = host.store.enqueue(
+    switchSession.id,
+    "BRO_MODEL_SWITCH_NEXT",
+    { kind: "gui" },
+  );
+  host.runtimes.wake(switchSession.id);
+  finishSwitch!();
+  const reads: Promise<unknown>[] = [];
+  const readErrors: unknown[] = [];
+  const refreshTimer = setInterval(() => {
+    reads.push(
+      Promise.all([
+        host.runtimes.history(switchSession.id),
+        host.runtimes.stats(switchSession.id),
+      ]).catch((e) => readErrors.push(e)),
+    );
+  }, 10);
+  try {
+    await until(() => host.store.input(afterSwitch.id)?.status === "completed");
+  } finally {
+    clearInterval(refreshTimer);
+    await Promise.all(reads);
+  }
+  if (readErrors.length)
+    throw new Error(`Read failed during model switch: ${readErrors[0]}`);
+  const switchedRequests = requests.slice(requestIndex);
+  if (
+    JSON.stringify(switchedRequests) !==
+    JSON.stringify([
+      { model: "gpt-5.4", effort: "high" },
+      { model: "gpt-5.3-codex", effort: "low" },
+    ])
+  )
+    throw new Error(
+      `Wrong models or reasoning on the wire: ${JSON.stringify(switchedRequests)}`,
+    );
+  if (host.store.input(beforeSwitch.id)?.status !== "completed")
+    throw new Error("Previous turn was lost");
   const duringShutdown = host.store.enqueue(session.id, "BRO_SHUTDOWN", {
     kind: "gui",
   });
@@ -170,6 +257,7 @@ try {
         "stop cancels real OMP provider request",
         "manual compaction serializes queued input",
         "native context statistics",
+        "active model change preserves the current request and switches model/effort for the queued turn",
         "host shutdown settles active worker",
       ],
     }),

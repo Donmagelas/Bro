@@ -13,7 +13,21 @@ export type InputStatus =
   | "failed"
   | "interrupted"
   | "cancelled";
-export type Thinking = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type Thinking =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+export interface ModelChoice {
+  connectionId: string;
+  id: string;
+  name: string;
+  thinkingLevels: Thinking[];
+  defaultThinking: Thinking;
+}
 export interface Connection {
   id: string;
   name: string;
@@ -55,6 +69,7 @@ export interface Session {
   cwd: string;
   projectId: string | null;
   connectionId: string | null;
+  model: string | null;
   thinking: Thinking;
   archived: boolean;
   pinned: boolean;
@@ -97,6 +112,8 @@ export type ExperimentMode = "normal" | "shadow" | "experimental";
 export interface Settings {
   defaultCwd: string;
   defaultConnectionId: string | null;
+  defaultModel?: string | null;
+  defaultThinking?: Thinking;
   memory: boolean;
   trustedFeishuUsers: string[];
   computer: boolean;

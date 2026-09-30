@@ -222,9 +222,14 @@ export class Runtimes {
   }
   async history(id: string) {
     const worker = this.workers.get(id);
-    if (worker) {
-      await worker.ready;
-      return this.call(worker, "history");
+    if (worker && !worker.releasing) {
+      try {
+        await worker.ready;
+        if (!worker.releasing) return await this.call(worker, "history");
+      } catch (error) {
+        if (!worker.releasing) throw error;
+        // A normal model change can retire the process during this read.
+      }
     }
     const session = this.store.session(id);
     if (!session?.runtimeFile) return [];
@@ -240,11 +245,19 @@ export class Runtimes {
   }
   async stats(id: string) {
     const worker = this.workers.get(id);
-    if (!worker) return this.store.getConfig(`runtimeStats:${id}`, null);
-    await worker.ready;
-    const result = await this.call(worker, "stats");
-    this.store.setConfig(`runtimeStats:${id}`, result);
-    return result;
+    if (worker && !worker.releasing) {
+      try {
+        await worker.ready;
+        if (!worker.releasing) {
+          const result = await this.call(worker, "stats");
+          this.store.setConfig(`runtimeStats:${id}`, result);
+          return result;
+        }
+      } catch (error) {
+        if (!worker.releasing) throw error;
+      }
+    }
+    return this.store.getConfig(`runtimeStats:${id}`, null);
   }
   async memory(id: string, query?: string) {
     const worker = this.workers.get(id);
@@ -326,6 +339,12 @@ export class Runtimes {
         after?.();
       }),
     );
+  }
+  configure(id: string, update: Parameters<Store["updateSession"]>[1]) {
+    this.store.updateSession(id, update);
+    // Keep the current turn intact. The next drain boundary reloads only this session.
+    if (this.workers.has(id)) this.stale.add(id);
+    this.changed();
   }
   private async disposeWorker(id: string) {
     const worker = this.workers.get(id);
