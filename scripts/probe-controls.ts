@@ -80,10 +80,13 @@ const provider = Bun.serve({
   },
 });
 const host = createHost(root, "probe");
-async function until(condition: () => boolean) {
+let phase = "setup";
+async function until(label: string, condition: () => boolean) {
+  phase = label;
+  console.log(`Waiting: ${label}`);
   const start = Date.now();
   while (!condition()) {
-    if (Date.now() - start > 45000) throw new Error("Timeout");
+    if (Date.now() - start > 45000) throw new Error(`Timeout: ${label}`);
     await Bun.sleep(25);
   }
 }
@@ -110,7 +113,7 @@ try {
   });
   const first = host.store.enqueue(session.id, "BRO_FIRST", { kind: "gui" });
   host.runtimes.wake(session.id);
-  await until(() => seen.includes("FIRST"));
+  await until("first request received", () => seen.includes("FIRST"));
   const second = host.store.enqueue(session.id, "BRO_SECOND", { kind: "gui" });
   host.runtimes.wake(session.id);
   await host.runtimes.steer(session.id, {
@@ -123,7 +126,10 @@ try {
     ],
     attachments: [],
   });
-  await until(() => host.store.input(second.id)?.status === "completed");
+  await until(
+    "queued second input completed",
+    () => host.store.input(second.id)?.status === "completed",
+  );
   if (seen.join(",") !== "FIRST,STEER,SECOND")
     throw new Error(`Wrong execution order ${seen.join(",")}`);
   const history = await host.runtimes.history(session.id);
@@ -131,9 +137,12 @@ try {
     throw new Error("Steer annotation missing");
   const cancel = host.store.enqueue(session.id, "BRO_CANCEL", { kind: "gui" });
   host.runtimes.wake(session.id);
-  await until(() => seen.includes("CANCEL"));
+  await until("cancel request received", () => seen.includes("CANCEL"));
   await host.runtimes.stop(session.id);
-  await until(() => host.store.input(cancel.id)?.status === "cancelled");
+  await until(
+    "cancel input settled",
+    () => host.store.input(cancel.id)?.status === "cancelled",
+  );
   if (host.store.input(first.id)?.status !== "completed")
     throw new Error("First prompt did not complete");
   compacting = true;
@@ -142,7 +151,10 @@ try {
   void maintenance.catch((error) => {
     compactFailure = error;
   });
-  await until(() => compactionRequest || !!compactFailure);
+  await until(
+    "compaction request received",
+    () => compactionRequest || !!compactFailure,
+  );
   if (compactFailure) throw compactFailure;
   const queuedDuringCompact = host.store.enqueue(
     session.id,
@@ -155,6 +167,7 @@ try {
   await maintenance;
   compacting = false;
   await until(
+    "queued input after compaction completed",
     () => host.store.input(queuedDuringCompact.id)?.status === "completed",
   );
   const stats = await host.runtimes.stats(session.id);
@@ -187,7 +200,7 @@ try {
     { kind: "gui" },
   );
   host.runtimes.wake(switchSession.id);
-  await until(() => !!finishSwitch);
+  await until("first model-switch request received", () => !!finishSwitch);
   const changed = await fetch(
     `http://127.0.0.1:${host.server.port}/sessions/${switchSession.id}`,
     {
@@ -221,7 +234,10 @@ try {
     );
   }, 10);
   try {
-    await until(() => host.store.input(afterSwitch.id)?.status === "completed");
+    await until(
+      "queued input after model switch completed",
+      () => host.store.input(afterSwitch.id)?.status === "completed",
+    );
   } finally {
     clearInterval(refreshTimer);
     await Promise.all(reads);
@@ -245,7 +261,7 @@ try {
     kind: "gui",
   });
   host.runtimes.wake(session.id);
-  await until(() => seen.includes("SHUTDOWN"));
+  await until("shutdown request received", () => seen.includes("SHUTDOWN"));
   await host.close();
   console.log(
     JSON.stringify({ shutdownCompleted: true, lastInput: duringShutdown.id }),
@@ -268,6 +284,25 @@ try {
   );
 } catch (error) {
   console.error(error);
+  console.error(
+    JSON.stringify({
+      phase,
+      seen,
+      requests,
+      compacting,
+      compactionRequest,
+      sessions: host.store
+        .sessions()
+        .map((session) => ({
+          id: session.id,
+          status: session.status,
+          error: session.error,
+          inputs: host.store
+            .inputs(session.id)
+            .map(({ text, status, error }) => ({ text, status, error })),
+        })),
+    }),
+  );
   console.error("Probe root", root);
   process.exitCode = 1;
 } finally {
