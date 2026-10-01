@@ -699,6 +699,244 @@ test("reply forks keep only the selected history, persist independently and reje
   }
 }, 30000);
 
+test("desktop capability checks compose with operations, invalid combinations never execute or resume", async () => {
+  const host = setup();
+  const session = host.store.createSession({ cwd: host.store.root });
+  const input = host.store.enqueue(session.id, "inspect windows", {
+    kind: "gui",
+  });
+  const calls: string[] = [];
+  const capabilities = spyOn(
+    Desktop.prototype,
+    "capabilities",
+  ).mockImplementation(async function (this: Desktop) {
+    calls.push("capabilities");
+    return this.state;
+  });
+  const execute = spyOn(Desktop.prototype, "execute").mockImplementation(
+    async (_id, operations) => {
+      calls.push("execute");
+      expect(operations).toEqual([{ method: "listWindows", args: [] }]);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              method: "listWindows",
+              result: [{ id: "opaque-A" }],
+            }),
+          },
+        ],
+        details: { sessionId: session.id, completedOperations: 1 },
+      };
+    },
+  );
+  const resume = spyOn(Desktop.prototype, "resumeFromMessage");
+  const invoke = (args: any) =>
+    host.runtimes.hostCall!(session.id, input.id, "bro_computer", args);
+  try {
+    const result = await invoke({
+      capabilities: true,
+      operations: [{ method: "listWindows", args: [] }],
+    });
+    expect(calls).toEqual(["capabilities", "execute"]);
+    expect(result.content.map((c: any) => JSON.parse(c.text).method)).toEqual([
+      "capabilities",
+      "listWindows",
+    ]);
+    expect(JSON.parse(result.content[1].text).result).toEqual([
+      { id: "opaque-A" },
+    ]);
+    calls.length = 0;
+    expect(await invoke({ capabilities: true })).toBe(host.state().desktop);
+    expect(calls).toEqual(["capabilities"]);
+    calls.length = 0;
+    for (const args of [
+      {
+        capabilities: true,
+        operations: [{ method: "axQuery", args: ["opaque-A", "Save"] }],
+      },
+      { resume: true, capabilities: true },
+      { resume: true, operations: [{ method: "listWindows" }] },
+      { capabilities: "false" },
+      {},
+    ])
+      await expect(invoke(args)).rejects.toThrow();
+    expect(calls).toEqual([]);
+    expect(resume).not.toHaveBeenCalled();
+  } finally {
+    capabilities.mockRestore();
+    execute.mockRestore();
+    resume.mockRestore();
+  }
+});
+
+test("real OMP receives desktop argument errors and can retry with a combined capability check and filtered query", async () => {
+  const root = mkdtempSync(join(tmpdir(), "bro-computer-runtime-"));
+  prepareRoot(root);
+  const toolReplies: string[] = [];
+  const queries: any[] = [];
+  let requests = 0,
+    writes = 0,
+    schemaSeen = false;
+  const capabilities = spyOn(
+    Desktop.prototype,
+    "capabilities",
+  ).mockImplementation(async function (this: Desktop) {
+    (this as any).native = {
+      listWindows: async () => [
+        { id: "fixture-window", pid: 20, app: "Test editor", focused: false },
+      ],
+      axQuery: async (...args: any[]) => {
+        queries.push(args);
+        return [{ ref: "save-button", title: "Save", role: "button" }];
+      },
+      typeText: async () => {
+        writes++;
+      },
+      close() {},
+    };
+    return this.state;
+  });
+  const provider = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(req) {
+      const body = (await req.json()) as any;
+      const naming = body.messages.some(
+        (m: any) =>
+          ["system", "developer"].includes(m.role) &&
+          JSON.stringify(m.content).includes("<title>"),
+      );
+      const replies = body.messages.filter((m: any) => m.role === "tool");
+      if (!naming) {
+        requests++;
+        schemaSeen ||= body.tools.some(
+          (t: any) =>
+            t.function?.name === "bro_computer" &&
+            JSON.stringify(t.function.parameters).includes("axQuery"),
+        );
+        if (replies.length)
+          toolReplies.push(JSON.stringify(replies.at(-1).content));
+      }
+      const args =
+        replies.length === 0
+          ? {
+              i: "Read the Save control",
+              capabilities: true,
+              operations: [
+                {
+                  method: "typeText",
+                  args: ["fixture-window", "must not execute"],
+                },
+                { method: "axQuery", args: ["fixture-window", "Save"] },
+              ],
+            }
+          : {
+              i: "Retry with a structured filter",
+              capabilities: true,
+              operations: [
+                {
+                  method: "axQuery",
+                  args: [
+                    "fixture-window",
+                    { title: "Save", role: "button", limit: 3 },
+                  ],
+                },
+              ],
+            };
+      const call = !naming && replies.length < 2;
+      const frame = {
+        id: "desktop-contract",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "fixture",
+        choices: [
+          {
+            index: 0,
+            delta: call
+              ? {
+                  role: "assistant",
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: `desktop-${replies.length}`,
+                      type: "function",
+                      function: {
+                        name: "bro_computer",
+                        arguments: JSON.stringify(args),
+                      },
+                    },
+                  ],
+                }
+              : {
+                  role: "assistant",
+                  content: naming
+                    ? "<title>Desktop test</title>"
+                    : "CONTRACT_OK",
+                },
+            finish_reason: null,
+          },
+        ],
+      };
+      return new Response(
+        `data: ${JSON.stringify(frame)}\n\ndata: ${JSON.stringify({ ...frame, choices: [{ index: 0, delta: {}, finish_reason: call ? "tool_calls" : "stop" }] })}\n\ndata: [DONE]\n\n`,
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    },
+  });
+  const host = createHost(root, "desktop-contract");
+  try {
+    host.state().desktop.enabled = true;
+    host.state().desktop.detectorReady = true;
+    host.store.saveConnection(
+      {
+        id: "fixture",
+        name: "Fixture",
+        kind: "api",
+        provider: "bro-desktop-contract",
+        model: "fixture",
+        baseUrl: `http://127.0.0.1:${provider.port}/v1`,
+        api: "openai-completions",
+        contextWindow: 128000,
+        maxTokens: 500,
+        reasoning: false,
+        imageInput: false,
+      },
+      "fixture-key",
+    );
+    const session = host.store.createSession({
+      title: "Desktop contract",
+      connectionId: "fixture",
+    });
+    const input = host.store.enqueue(session.id, "Inspect the Save control", {
+      kind: "gui",
+    });
+    host.runtimes.wake(session.id);
+    const deadline = Date.now() + 20000;
+    while (
+      ["queued", "running"].includes(host.store.input(input.id)!.status) &&
+      Date.now() < deadline
+    )
+      await Bun.sleep(20);
+    expect(host.store.input(input.id)?.status).toBe("completed");
+    expect(schemaSeen).toBe(true);
+    expect(requests).toBe(3);
+    expect(toolReplies[0]).toContain("参数无效");
+    expect(toolReplies[1]).toContain("capabilities");
+    expect(toolReplies[1]).toContain("save-button");
+    expect(queries).toEqual([
+      ["fixture-window", { title: "Save", role: "button", limit: 3 }],
+    ]);
+    expect(writes).toBe(0);
+  } finally {
+    await host.close();
+    capabilities.mockRestore();
+    await provider.stop(true);
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 30000);
+
 test("desktop resumes from a fresh GUI or Feishu task, never the paused task or an automatic monitor event", async () => {
   const host = setup();
   const session = (await req(host, "/sessions", {})).data;

@@ -1,38 +1,19 @@
 import { WorkspaceLocks } from "./locks";
 import {
+  desktopMethods,
+  validateDesktopOperations,
+  type DesktopOperation,
+} from "../../packages/contracts/computer";
+import {
   InputMonitor,
   type InputEvent,
 } from "../../packages/platform/input-monitor";
 
-const readMethods = new Set([
-  "listDisplays",
-  "listWindows",
-  "capture",
-  "axSnapshot",
-  "axQuery",
-  "axElementAt",
-  "axFocused",
-  "axNode",
-  "axAttributes",
-  "axChildren",
-  "axParent",
-]);
-const inputMethods = new Set([
-  "click",
-  "moveMouse",
-  "scroll",
-  "typeText",
-  "keyChord",
-  "raiseWindow",
-  "axPerform",
-  "axSetValue",
-  "axFocus",
-  "axClick",
-]);
-export interface DesktopOperation {
-  method: string;
-  args?: any[];
-}
+const readMethods = new Set(
+  Object.entries(desktopMethods)
+    .filter(([, spec]) => spec.read)
+    .map(([name]) => name),
+);
 interface Target {
   id: string;
   pid: number;
@@ -309,16 +290,8 @@ export class Desktop {
     for (const controller of this.runs.get(sessionId) || []) controller.abort();
   }
   async execute(sessionId: string, operations: DesktopOperation[]) {
-    if (
-      !Array.isArray(operations) ||
-      !operations.length ||
-      operations.length > 32
-    )
-      throw new Error("每批需要 1–32 个桌面操作");
+    validateDesktopOperations(operations);
     if (!this.state.enabled) throw new Error("桌面操作尚未启用");
-    for (const op of operations)
-      if (!readMethods.has(op.method) && !inputMethods.has(op.method))
-        throw new Error(`不支持的桌面动作 ${op.method}`);
     const controller = new AbortController();
     const active = this.runs.get(sessionId) || new Set<AbortController>();
     active.add(controller);
@@ -490,11 +463,22 @@ export class Desktop {
         }
         content.push({
           type: "text",
-          text: JSON.stringify({ method, result: result ?? "完成" }),
+          text: JSON.stringify({
+            method,
+            result: reading
+              ? (result ?? null)
+              : {
+                  status: "dispatched",
+                  effectVerified: false,
+                },
+          }),
         });
         completedOperations++;
       }
-      return { content, details: { sessionId } };
+      return {
+        content,
+        details: { sessionId, completedOperations },
+      };
     } catch (error) {
       if (error !== humanInterruption) throw error;
       const target = this.operation?.target;

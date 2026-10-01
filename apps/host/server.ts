@@ -20,6 +20,7 @@ import { Runtimes } from "./runtime";
 import { AccountAuth } from "./auth";
 import { Resources } from "./resources";
 import { Desktop } from "./desktop";
+import { validateComputerRequest } from "../../packages/contracts/computer";
 import { Feishu, type FeishuConfig } from "../../packages/integrations/feishu";
 import { FeishuSetup } from "../../packages/integrations/feishu-setup";
 import { Monitor } from "../../packages/integrations/monitor";
@@ -143,11 +144,20 @@ export function createHost(
     if (!input || input.sessionId !== sessionId)
       throw new Error("无有效任务来源");
     if (action === "bro_computer") {
+      validateComputerRequest(args);
       if (args.resume)
         return desktop.resumeFromMessage(input.createdAt, input.source.kind);
-      return args.capabilities
-        ? desktop.capabilities()
-        : desktop.execute(sessionId, args.operations);
+      const capabilities = args.capabilities
+        ? JSON.stringify({
+            method: "capabilities",
+            result: await desktop.capabilities(),
+          })
+        : undefined;
+      if (!args.operations) return desktop.state;
+      const result = await desktop.execute(sessionId, args.operations);
+      if (capabilities)
+        result.content.unshift({ type: "text", text: capabilities });
+      return result;
     }
     if (action === "bro_sessions")
       return store

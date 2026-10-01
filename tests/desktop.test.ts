@@ -52,6 +52,79 @@ const type = (target = "opaque-A", text = "abcdefghijklmnopqrstuvwxyz") => ({
 });
 const capture = { method: "capture" };
 
+test("invalid desktop arguments reject the whole batch before earlier writes or native initialization", async () => {
+  const invalid = [
+    { method: "axQuery", args: ["opaque-A", "Save"] },
+    { method: "axQuery", args: ["opaque-A", { title: "Save", limti: 5 }] },
+    { method: "axSnapshot", args: ["opaque-A", { maxDepth: -1 }] },
+    { method: "click", args: ["opaque-A", "12", 30] },
+    { method: "click", args: ["opaque-A", Infinity, 30] },
+    { method: "click", args: ["opaque-A", 12, 30, { takeOver: true }] },
+    { method: "typeText", args: ["opaque-A", { text: "hello" }] },
+    { method: "keyChord", args: ["opaque-A", "Meta+S"] },
+    { method: "listWindows", args: ["ignored"] },
+    { method: "axFocus", args: ["e7", { takeover: true }] },
+    { method: "capture", args: null },
+    { method: "__proto__", args: [] },
+    null,
+  ];
+  let initialized = false;
+  const desktop = new Desktop(
+    "/unused",
+    () => {},
+    async () => {
+      initialized = true;
+      throw new Error("native must never load");
+    },
+  );
+  desktop.state.enabled = true;
+  for (const op of invalid) {
+    await expect(desktop.execute("one", [type(), op] as any)).rejects.toThrow(
+      /参数无效|方法不支持/,
+    );
+    expect(initialized).toBe(false);
+    expect(desktop.state.owner).toBeNull();
+  }
+});
+
+test("typed queries and snapshot options reach the backend without losing filters", async () => {
+  const received: any[] = [];
+  const { desktop } = setup({
+    async axQuery(...args: any[]) {
+      received.push(args);
+      return [{ ref: "e7", role: "button" }];
+    },
+    async axSnapshot(...args: any[]) {
+      received.push(args);
+      return { text: "Button [ref=e8]" };
+    },
+  });
+  const query = { title: "Save", role: "button", limit: 3 };
+  const options = { maxDepth: 20, maxNodes: 500 };
+  await desktop.execute("one", [
+    { method: "axQuery", args: ["opaque-A", query] },
+    { method: "axSnapshot", args: ["opaque-A", options] },
+  ]);
+  expect(received).toEqual([
+    ["opaque-A", query],
+    ["opaque-A", options],
+  ]);
+});
+
+test("dispatched clicks do not claim a UI effect or silently replay with foreground input", async () => {
+  const { desktop, calls } = setup();
+  const result = await desktop.execute("one", [
+    { method: "click", args: ["opaque-A", 12, 30] },
+    capture,
+  ]);
+  expect(calls).toEqual([["opaque-A", 12, 30], "desktop"]);
+  expect(JSON.parse(result.content[0].text)).toEqual({
+    method: "click",
+    result: { status: "dispatched", effectVerified: false },
+  });
+  expect(result.details.completedOperations).toBe(2);
+});
+
 test("newly granted permissions distinguish a stale native backend from usable tools", async () => {
   const { desktop } = setup({
     capabilities: { capture: false, input: false, ax: false },
