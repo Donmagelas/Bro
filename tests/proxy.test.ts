@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import { macProxyEnvironment } from "../packages/platform/proxy";
+import {
+  macProxyEnvironment,
+  systemProxyManager,
+} from "../packages/platform/proxy";
 
 const settings = `<dictionary> {
   ExceptionsList : <array> {
@@ -65,6 +68,11 @@ test("Bun requests use the inherited proxy while local host traffic stays direct
     port: 0,
     fetch: () => new Response("proxy"),
   });
+  const replacement = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => new Response("new proxy"),
+  });
   const local = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -80,11 +88,19 @@ test("Bun requests use the inherited proxy while local host traffic stays direct
         process.execPath,
         "-e",
         `
-      import { macProxyEnvironment } from ${JSON.stringify(new URL("../packages/platform/proxy.ts", import.meta.url).href)};
-      Object.assign(process.env, macProxyEnvironment(${JSON.stringify(input)}, {}));
-      const proxied = await fetch("http://bro-proxy-probe.invalid", { signal: AbortSignal.timeout(3000) });
-      const local = await fetch("http://127.0.0.1:${local.port}", { signal: AbortSignal.timeout(3000) });
-      console.log(JSON.stringify([await proxied.text(), await local.text()]));
+      import { systemProxyManager } from ${JSON.stringify(new URL("../packages/platform/proxy.ts", import.meta.url).href)};
+      let output = ${JSON.stringify(input)};
+      const manager = systemProxyManager(process.env, async () => output, "darwin");
+      await manager.refresh();
+      const proxied = await manager.request("http://bro-proxy-probe.invalid", { signal: AbortSignal.timeout(3000) });
+      const local = await manager.request("http://127.0.0.1:${local.port}", { signal: AbortSignal.timeout(3000) });
+      output = output.replace("HTTPPort : ${proxy.port}", "HTTPPort : ${replacement.port}");
+      await manager.refresh();
+      const changed = await manager.request("http://bro-proxy-probe.invalid", { signal: AbortSignal.timeout(3000) });
+      output = "<dictionary> {}";
+      await manager.refresh();
+      const directFailure = await manager.request("http://bro-proxy-probe.invalid", { signal: AbortSignal.timeout(3000) }).then(() => false, () => true);
+      console.log(JSON.stringify([await proxied.text(), await local.text(), await changed.text(), process.env.HTTP_PROXY === undefined, directFailure]));
     `,
       ],
       {
@@ -104,9 +120,40 @@ test("Bun requests use the inherited proxy while local host traffic stays direct
     ]);
     expect(stderr).toBe("");
     expect(code).toBe(0);
-    expect(JSON.parse(stdout.trim())).toEqual(["proxy", "direct"]);
+    expect(JSON.parse(stdout.trim())).toEqual([
+      "proxy",
+      "direct",
+      "new proxy",
+      true,
+      true,
+    ]);
   } finally {
     await proxy.stop(true);
+    await replacement.stop(true);
     await local.stop(true);
   }
+});
+
+test("system proxy changes replace and remove only Bro-adopted values; workers rediscover them", async () => {
+  let output = settings;
+  const env: NodeJS.ProcessEnv = { NO_PROXY: "keep.example" };
+  const manager = systemProxyManager(env, async () => output, "darwin");
+  await manager.refresh();
+  expect(env.HTTP_PROXY).toBe("http://127.0.0.1:7890");
+  expect(manager.childEnvironment()).toEqual({ NO_PROXY: "keep.example" });
+  output = settings
+    .replaceAll("127.0.0.1", "localhost")
+    .replace("7890", "8000");
+  await manager.refresh();
+  expect(env.HTTP_PROXY).toBe("http://localhost:8000");
+  output = "<dictionary> {}";
+  await manager.refresh();
+  expect(env).toEqual({ NO_PROXY: "keep.example" });
+  output = settings;
+  env.HTTPS_PROXY = "http://explicit:8080";
+  await manager.refresh();
+  expect(env).toEqual({
+    NO_PROXY: "keep.example",
+    HTTPS_PROXY: "http://explicit:8080",
+  });
 });

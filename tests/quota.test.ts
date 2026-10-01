@@ -95,6 +95,14 @@ test("quota reads real OMP windows, caches polls, refreshes explicitly and never
     const unavailable = await auth.quota(true);
     expect(unavailable.status).toBe("unavailable");
     expect(unavailable.accounts[0]?.windows).toEqual([]);
+    // A transient usage endpoint failure must recover on the same connection.
+    failed = false;
+    expect((await auth.quota()).status).toBe("unavailable");
+    await Bun.sleep(5100);
+    expect((await auth.quota()).status).toBe("ready");
+    access.mockRejectedValueOnce(new Error("network unavailable"));
+    expect((await auth.quota(true)).status).toBe("unavailable");
+    expect((await auth.quota(true)).status).toBe("ready");
     access.mockResolvedValue([]);
     await auth.logout();
     expect((await auth.quota()).status).toBe("signed_out");

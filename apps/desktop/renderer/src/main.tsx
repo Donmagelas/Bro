@@ -16,6 +16,7 @@ import type {
   HostState,
   Input,
   ModelChoice,
+  ModelActivity,
   Project,
   Session,
   Thinking,
@@ -139,6 +140,53 @@ function errorText(error: unknown): string {
     .replace(/^Error: /, "")
     .replace(/^Error invoking remote method '[^']+': /, "")
     .replace(/^(?:Error: )+/, "");
+}
+function RunProgress({
+  status,
+  activity,
+}: {
+  status: string;
+  activity?: ModelActivity;
+}) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const seconds = activity
+    ? Math.max(0, Math.floor((now - activity.since) / 1000))
+    : 0;
+  const retry =
+    activity?.attempt && activity.maxAttempts
+      ? `（第 ${activity.attempt}/${activity.maxAttempts} 轮重试）`
+      : "";
+  let text =
+    status === "starting"
+      ? "正在唤醒 Bro…"
+      : status === "waiting"
+        ? "等待工作目录可用…"
+        : "正在等待模型响应…";
+  if (activity?.phase === "retrying") {
+    const remaining = Math.max(
+      0,
+      Math.ceil((activity.delayMs || 0) / 1000) - seconds,
+    );
+    text =
+      activity.delayMs === undefined
+        ? `模型请求未成功，正在尝试恢复连接…${retry}`
+        : `模型请求异常，${remaining ? `${remaining} 秒后重试` : "正在重新连接"}${retry}`;
+  } else if (activity?.phase === "waiting") {
+    text =
+      seconds >= 15
+        ? `模型尚未响应，已等待 ${seconds} 秒${retry}；连接超时会自动重试，可随时停止。`
+        : `正在等待模型响应…${retry}`;
+  } else if (activity?.phase === "responding") text = "Bro 正在思考…";
+  return (
+    <div className="running-tool" role="status">
+      <span className="spinner" />
+      {text}
+    </div>
+  );
 }
 function App() {
   const [models, setModels] = useState<ModelChoice[]>([]);
@@ -1064,34 +1112,36 @@ function App() {
                 正在执行 {tool}
               </div>
             )}
-            {!live &&
-              !tool &&
+            {!tool &&
               ["starting", "waiting", "running"].includes(
                 session?.status || "",
-              ) && (
-                <div className="running-tool">
-                  <span className="spinner" />
-                  {session?.status === "starting"
-                    ? "正在唤醒 Bro…"
-                    : session?.status === "waiting"
-                      ? "等待工作目录可用…"
-                      : "Bro 正在处理…"}
+              ) &&
+              (!live ||
+                state?.modelActivity?.[selected || ""]?.phase ===
+                  "retrying") && (
+                <RunProgress
+                  status={session!.status}
+                  activity={state?.modelActivity?.[selected || ""]}
+                />
+              )}
+            {session?.error &&
+              (session.queued > 0 ||
+                !inputs.some((i) => i.error === session.error)) && (
+                <div className="inline-error">
+                  {session.error}
+                  {session.queued > 0 && (
+                    <button
+                      onClick={() =>
+                        void run(() =>
+                          api(`/sessions/${selected}/resume`, "POST", {}),
+                        )
+                      }
+                    >
+                      继续处理队列
+                    </button>
+                  )}
                 </div>
               )}
-            {session?.error && (
-              <div className="inline-error">
-                {session.error}
-                <button
-                  onClick={() =>
-                    void run(() =>
-                      api(`/sessions/${selected}/resume`, "POST", {}),
-                    )
-                  }
-                >
-                  继续处理队列
-                </button>
-              </div>
-            )}
             <div ref={bottom} />
           </div>
         </div>

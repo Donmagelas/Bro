@@ -103,6 +103,7 @@ export function createHost(
     const savedFeishu = store.getConfig<FeishuConfig | null>("feishu", null);
     return {
       version: VERSION,
+      modelActivity: runtimes.modelActivity,
       sessions: store.sessions(),
       archivedSessions: store.sessions(true).filter((s) => s.archived),
       projects: store.projects(),

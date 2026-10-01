@@ -1,3 +1,7 @@
+import {
+  inheritSystemProxy,
+  fetchWithSystemProxy,
+} from "../../packages/platform/proxy";
 import { join } from "node:path";
 import type { Store } from "./store";
 import type {
@@ -121,7 +125,8 @@ export class AccountAuth {
     if (
       !force &&
       this.quotaCache &&
-      Date.now() - this.quotaCache.checkedAt < 60000
+      Date.now() - this.quotaCache.checkedAt <
+        (this.quotaCache.status === "ready" ? 60000 : 5000)
     )
       return Promise.resolve(this.quotaCache);
     const controller = new AbortController();
@@ -131,6 +136,7 @@ export class AccountAuth {
       AbortSignal.timeout(12000),
     ]);
     const request = this.use(async (): Promise<ChatGPTQuota> => {
+      await inheritSystemProxy();
       await this.storage.credentials.reload();
       const accounts = await this.storage.oauth.accessAll("openai-codex", {
         signal,
@@ -153,7 +159,7 @@ export class AccountAuth {
                       },
                       signal,
                     },
-                    { fetch },
+                    { fetch: fetchWithSystemProxy },
                   )
                   .catch(() => null)
               : null;
@@ -220,7 +226,13 @@ export class AccountAuth {
         (): ChatGPTQuota => ({
           status: "unavailable",
           checkedAt: Date.now(),
-          accounts: [],
+          accounts: (this.storage?.oauth.accounts("openai-codex") || []).map(
+            (a: any) => ({
+              id: String(a.credentialId),
+              email: a.email,
+              windows: [],
+            }),
+          ),
         }),
       )
       .then((result) => {
@@ -247,6 +259,7 @@ export class AccountAuth {
   start() {
     return this.use(async () => {
       if (this.controller) throw new Error("登录正在进行");
+      await inheritSystemProxy();
       this.clearQuota();
       this.controller = new AbortController();
       this.loginState = { status: "starting" };

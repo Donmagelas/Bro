@@ -5,8 +5,15 @@ export function AccountQuota({ connectionId }: { connectionId: string }) {
   const [quota, setQuota] = useState<ChatGPTQuota | null>(null);
   const [loading, setLoading] = useState(false);
   const sequence = useRef(0);
+  const inFlight = useRef(false);
+  const refreshAgain = useRef(false);
   const refresh = useCallback(
     async (force = false) => {
+      if (inFlight.current) {
+        if (force) refreshAgain.current = true;
+        return;
+      }
+      inFlight.current = true;
       const request = ++sequence.current;
       setLoading(true);
       try {
@@ -22,25 +29,43 @@ export function AccountQuota({ connectionId }: { connectionId: string }) {
             accounts: [],
           });
       } finally {
-        if (sequence.current === request) setLoading(false);
+        if (sequence.current === request) {
+          inFlight.current = false;
+          setLoading(false);
+          if (refreshAgain.current) {
+            refreshAgain.current = false;
+            void refresh(true);
+          }
+        }
       }
     },
     [connectionId],
   );
   useEffect(() => {
+    setQuota(null);
+    inFlight.current = false;
+    refreshAgain.current = false;
     void refresh();
     const poll = () => {
       if (!document.hidden) void refresh();
     };
-    const interval = window.setInterval(poll, 60000);
+    const reconnect = () => {
+      if (!document.hidden) void refresh(true);
+    };
+    const interval = window.setInterval(poll, 15000);
+    window.addEventListener("online", reconnect);
+    document.addEventListener("visibilitychange", poll);
     window.addEventListener("focus", poll);
     const unsubscribe = window.bro.onEvent((event) => {
-      if (event.type === "state" || event.type === "connected") poll();
+      if (event.type === "connected") reconnect();
+      else if (event.type === "state") poll();
     });
     return () => {
       sequence.current++;
       clearInterval(interval);
       window.removeEventListener("focus", poll);
+      window.removeEventListener("online", reconnect);
+      document.removeEventListener("visibilitychange", poll);
       unsubscribe();
     };
   }, [refresh]);
@@ -66,7 +91,11 @@ export function AccountQuota({ connectionId }: { connectionId: string }) {
       ) : quota.status === "signed_out" ? (
         <div className="quota-note">请先登录 ChatGPT</div>
       ) : quota.status === "unavailable" ? (
-        <div className="quota-note">额度暂不可用，点击刷新重试</div>
+        <div className="quota-note">
+          {quota.accounts.length
+            ? "登录信息已保留，额度暂不可用；网络恢复后自动重试"
+            : "暂时无法读取账号额度，网络恢复后自动重试"}
+        </div>
       ) : (
         quota.accounts.map((account) => (
           <div className="quota-account" key={account.id}>

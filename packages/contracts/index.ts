@@ -193,7 +193,15 @@ export interface FeishuSetupState {
   pairingExpiresAt?: number;
   error?: string;
 }
+export interface ModelActivity {
+  phase: "waiting" | "retrying" | "responding";
+  since: number;
+  attempt?: number;
+  maxAttempts?: number;
+  delayMs?: number;
+}
 export interface HostState {
+  modelActivity?: Record<string, ModelActivity>;
   version: string;
   sessions: Session[];
   archivedSessions: Session[];

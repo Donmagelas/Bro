@@ -1,3 +1,6 @@
+import { proxyEnvironmentForChild } from "../../packages/platform/proxy";
+import { modelActivity } from "../../packages/runtime-omp/progress";
+import type { ModelActivity } from "../../packages/contracts";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { appendFileSync, realpathSync } from "node:fs";
@@ -21,6 +24,7 @@ interface Worker {
 }
 export class Runtimes {
   private workers = new Map<string, Worker>();
+  readonly modelActivity: Record<string, ModelActivity> = {};
   private running = new Set<string>();
   private pending = new Set<Promise<unknown>>();
   private track<T>(task: Promise<T>): Promise<T> {
@@ -100,7 +104,7 @@ export class Runtimes {
       {
         cwd: session.cwd,
         env: {
-          ...process.env,
+          ...proxyEnvironmentForChild(),
           BRO_DATA_DIR: this.store.root,
           PI_CODING_AGENT_DIR: join(this.store.root, "agent"),
           PI_NO_TITLE: "1", // Bro owns the first-message title and manual-rename guard.
@@ -148,9 +152,16 @@ export class Runtimes {
             clearTimeout(pending.timer);
             if (message.error) pending.reject(new Error(String(message.error)));
             else pending.resolve(message.result);
-          } else if (message.type === "event")
+          } else if (message.type === "event") {
+            const previous = this.modelActivity[id];
+            const next = modelActivity(message.event, previous);
+            if (next !== previous) {
+              if (next) this.modelActivity[id] = next;
+              else delete this.modelActivity[id];
+              this.changed();
+            }
             this.emit({ sessionId: id, type: "runtime", data: message.event });
-          else if (message.type === "host_call") {
+          } else if (message.type === "host_call") {
             void Promise.resolve()
               .then(() =>
                 this.hostCall?.(
@@ -479,6 +490,7 @@ export class Runtimes {
           this.replied();
           break;
         } finally {
+          delete this.modelActivity[id];
           this.waiting.delete(id);
           unlock?.();
         }
@@ -498,6 +510,7 @@ export class Runtimes {
       if (this.store.session(id))
         this.store.updateSession(id, { status: "error", error: String(error) });
     } finally {
+      delete this.modelActivity[id];
       this.running.delete(id);
       this.changed();
       if (!this.closing)
