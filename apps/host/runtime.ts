@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { appendFileSync, realpathSync } from "node:fs";
 import { WorkspaceLocks } from "./locks";
+import { setTimeout as delay } from "node:timers/promises";
 import { displayHistory } from "../../packages/runtime-omp/history";
 import type { Store } from "./store";
 import type { Input, RpcMessage, RuntimeEvent } from "../../packages/contracts";
@@ -39,6 +40,7 @@ export class Runtimes {
   private stale = new Set<string>();
   private locks = new WorkspaceLocks();
   private waiting = new Map<string, AbortController>();
+  private leases = new Map<string, { key: string; unlock?: () => void }>();
   private aborted = new Set<string>();
   private titling = new Set<string>();
   get pendingRefresh() {
@@ -162,26 +164,28 @@ export class Runtimes {
             }
             this.emit({ sessionId: id, type: "runtime", data: message.event });
           } else if (message.type === "host_call") {
-            void Promise.resolve()
-              .then(() =>
-                this.hostCall?.(
-                  id,
-                  String(message.inputId),
-                  String(message.action),
-                  message.args,
-                ),
-              )
-              .then(
-                (result) =>
-                  proc.send({ type: "host_result", id: message.id, result }),
-                (error) =>
-                  proc.send({
-                    type: "host_result",
-                    id: message.id,
-                    error: String(error),
-                  }),
-              )
-              .catch(() => {}); // A result may arrive after its worker was stopped.
+            void this.track(
+              Promise.resolve()
+                .then(() =>
+                  this.hostCall?.(
+                    id,
+                    String(message.inputId),
+                    String(message.action),
+                    message.args,
+                  ),
+                )
+                .then(
+                  (result) =>
+                    proc.send({ type: "host_result", id: message.id, result }),
+                  (error) =>
+                    proc.send({
+                      type: "host_result",
+                      id: message.id,
+                      error: String(error),
+                    }),
+                )
+                .catch(() => {}),
+            ); // A result may arrive after its worker was stopped.
           }
         },
       },
@@ -199,6 +203,7 @@ export class Runtimes {
     void log(proc.stdout as ReadableStream<Uint8Array>);
     void log(proc.stderr as ReadableStream<Uint8Array>);
     void proc.exited.then((code) => {
+      this.waiting.get(id)?.abort();
       this.beforeStop?.(id);
       const error = new Error(`会话运行进程退出 (${code})`);
       readyReject(error);
@@ -293,6 +298,94 @@ export class Runtimes {
     if (worker) {
       await worker.ready;
       await this.call(worker, "abort", {}, 15000);
+    }
+  }
+  async pause(id: string, seconds: number) {
+    const controller = this.waiting.get(id);
+    if (!controller) throw new Error("当前任务已结束");
+    await delay(seconds * 1000, undefined, { signal: controller.signal });
+    return {
+      elapsedSeconds: seconds,
+      message: "等待结束，请重新读取任务状态；时间经过不代表任务完成。",
+    };
+  }
+  async delegate(
+    id: string,
+    inputId: string,
+    targetId: string,
+    text: string,
+    waitForResult = true,
+  ) {
+    const target = this.store.session(targetId);
+    if (!target || target.archived) throw new Error("目标会话不存在或已归档");
+    if (target.status === "interrupted")
+      throw new Error("目标会话已中断，请先核对并恢复");
+    if (!target.connectionId && !this.store.getSettings().defaultConnectionId)
+      throw new Error("目标会话未配置模型连接");
+    const controller = this.waiting.get(id),
+      lease = this.leases.get(id);
+    if (
+      !controller ||
+      !lease ||
+      this.store.input(inputId)?.status !== "running"
+    )
+      throw new Error("来源任务已结束");
+    controller.signal.throwIfAborted();
+    const d = this.store.delegate(
+      id,
+      targetId,
+      inputId,
+      text,
+      waitForResult ? "inline" : "none",
+    );
+    this.wake(targetId);
+    this.changed();
+    if (!waitForResult)
+      return {
+        id: d.id,
+        status: "queued",
+        message: "消息已进入目标会话队列；本次只要求发送，不等待执行结果。",
+      };
+    // The worker runs this tool exclusively and disallows live background jobs.
+    // Yield the directory for the whole wait, including different-directory
+    // targets: their nested tasks may need our directory too.
+    lease.unlock?.();
+    lease.unlock = undefined;
+    try {
+      for (;;) {
+        controller.signal.throwIfAborted();
+        const current = this.store.delegation(d.id)!;
+        if (!["queued", "running"].includes(current.status))
+          return { id: d.id, status: current.status, result: current.result };
+        const session = this.store.session(targetId);
+        if (
+          !session ||
+          session.archived ||
+          ["error", "interrupted"].includes(session.status)
+        ) {
+          const input = this.store.input(d.targetInputId);
+          const message = session?.error || "目标会话无法继续，任务未完成";
+          if (input) {
+            this.store.finishInput(input.id, "failed", message);
+            this.store.completeDelegation(input, message, "failed");
+          } else throw new Error(message);
+          continue;
+        }
+        await delay(100, undefined, { signal: controller.signal });
+      }
+    } finally {
+      if (controller.signal.aborted) {
+        // Cancel only this request, never an unrelated task ahead of it.
+        const input = this.store.input(d.targetInputId);
+        if (input?.status === "queued") {
+          this.store.finishInput(input.id, "cancelled", "来源任务已停止");
+          this.store.completeDelegation(input, "来源任务已停止", "cancelled");
+        } else if (input?.status === "running") await this.stop(targetId);
+      } else {
+        // Reacquire before returning control to any subsequent source tool.
+        lease.unlock = await this.locks.acquire(lease.key, controller.signal);
+      }
+      this.changed();
     }
   }
   compact(id: string) {
@@ -435,19 +528,20 @@ export class Runtimes {
       this.startTitle(id, worker);
       while (!this.closing && (input = this.store.claim(id))) {
         this.aborted.delete(id);
-        let unlock: (() => void) | undefined;
+        const lease: { key: string; unlock?: () => void } = { key: "" };
         try {
           const path = realpathSync(s.cwd),
             key = process.platform === "win32" ? path.toLowerCase() : path;
           const controller = new AbortController();
           this.waiting.set(id, controller);
+          lease.key = key;
+          this.leases.set(id, lease);
           this.store.updateSession(id, {
             status: this.locks.busy(key) ? "waiting" : "running",
             error: null,
           });
           this.changed();
-          unlock = await this.locks.acquire(key, controller.signal);
-          this.waiting.delete(id);
+          lease.unlock = await this.locks.acquire(key, controller.signal);
           this.store.updateSession(id, { status: "running" });
           this.changed();
           const result = await this.call(worker, "prompt", { input }, 0);
@@ -457,19 +551,15 @@ export class Runtimes {
             this.aborted.delete(id) || result.stopReason === "aborted"
               ? "cancelled"
               : "completed";
+          const text =
+            status === "cancelled"
+              ? "任务已停止，尚未确认完成。"
+              : result.text || "运行结束，无文本结果。";
           this.store.db.transaction(() => {
             this.store.finishInput(input!.id, status);
-            this.store.completeDelegation(
-              input!,
-              result.text || "运行结束，无文本结果。",
-              status,
-            );
+            this.store.completeDelegation(input!, text, status);
             if (!input!.parentRequestId)
-              this.store.addReply(
-                input!.id,
-                input!.source,
-                result.text || "运行已结束。",
-              );
+              this.store.addReply(input!.id, input!.source, text);
           })();
           this.emit({ sessionId: id, type: "history", data: result.history });
           this.replied();
@@ -477,7 +567,8 @@ export class Runtimes {
           const message =
             error instanceof Error ? error.message : String(error);
           const status =
-            error instanceof DOMException && error.name === "AbortError"
+            this.aborted.has(id) ||
+            (error instanceof Error && error.name === "AbortError")
               ? "cancelled"
               : this.workers.has(id)
                 ? "failed"
@@ -499,7 +590,8 @@ export class Runtimes {
         } finally {
           delete this.modelActivity[id];
           this.waiting.delete(id);
-          unlock?.();
+          this.leases.delete(id);
+          lease.unlock?.();
         }
         input = null;
         if (this.stale.has(id)) {

@@ -130,6 +130,8 @@ export interface Delegation {
   status: InputStatus;
   result?: string;
   createdAt: number;
+  /** Missing only on legacy requests, whose results were queued separately. */
+  delivery?: "inline" | "none";
 }
 export type ExperimentMode = "normal" | "shadow" | "experimental";
 export interface Settings {

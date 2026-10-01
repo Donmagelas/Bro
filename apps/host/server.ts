@@ -175,19 +175,27 @@ export function createHost(
         -30,
       );
     if (action === "bro_send_session") {
-      const d = store.delegate(
+      if (
+        args.waitForResult !== undefined &&
+        typeof args.waitForResult !== "boolean"
+      )
+        throw new Error("waitForResult 必须是布尔值");
+      return runtimes.delegate(
         sessionId,
-        str(args.sessionId, "会话 ID"),
         inputId,
+        str(args.sessionId, "会话 ID"),
         str(args.text, "交办内容"),
+        args.waitForResult !== false,
       );
-      runtimes.wake(d.targetSessionId);
-      changed();
-      return {
-        id: d.id,
-        status: "queued",
-        message: "已进入目标会话队列，完成后返回来源会话。",
-      };
+    }
+    if (action === "bro_wait") {
+      if (
+        !Number.isFinite(args.seconds) ||
+        args.seconds < 1 ||
+        args.seconds > 30
+      )
+        throw new Error("等待秒数须为 1–30");
+      return runtimes.pause(sessionId, args.seconds);
     }
     if (action === "bro_stop_session") {
       await runtimes.stop(str(args.sessionId, "会话 ID"));

@@ -82,7 +82,7 @@ test("delete clears the binding and a subsequent event creates a fresh session",
   const second = s.ingest("2", "dm:a", "new", { kind: "feishu" }, "dm")!;
   expect(second.sessionId).not.toBe(first.sessionId);
 });
-test("delegation results keep original reply correlation and enqueue exactly once", () => {
+test("legacy delegation results keep original reply correlation and enqueue exactly once", () => {
   const s = setup(),
     s0 = s.createSession(),
     s1 = s.createSession(),
@@ -98,6 +98,10 @@ test("delegation results keep original reply correlation and enqueue exactly onc
   s.finishInput(original.id, "completed");
   const d1 = s.delegate(s0.id, s1.id, original.id, "do one"),
     d2 = s.delegate(s0.id, s2.id, original.id, "do two");
+  delete d2.delivery;
+  s.db
+    .query("UPDATE delegations SET value=? WHERE id=?")
+    .run(JSON.stringify(d2), d2.id);
   s.enqueue(s0.id, "unrelated later message", {
     ...origin,
     messageId: "latest",
@@ -110,6 +114,58 @@ test("delegation results keep original reply correlation and enqueue exactly onc
   expect(results[0]?.source.messageId).toBe("original");
   expect(s.delegations().find((d) => d.id === d1.id)?.status).toBe("queued");
   expect(s.inputs(s1.id)[0]?.source.kind).toBe("session");
+});
+test("inline and send-only results never enqueue a second source turn", () => {
+  const s = setup(),
+    source = s.createSession(),
+    target = s.createSession();
+  const input = s.enqueue(source.id, "task", { kind: "gui" });
+  for (const delivery of ["inline", "none"] as const) {
+    const d = s.delegate(source.id, target.id, input.id, "child", delivery);
+    const child = s.input(d.targetInputId)!;
+    s.completeDelegation(child, "exact result", "completed");
+    s.completeDelegation(child, "duplicate", "completed");
+    expect(s.delegations().find((value) => value.id === d.id)?.result).toBe(
+      "exact result",
+    );
+  }
+  expect(s.inputs(source.id)).toHaveLength(1);
+});
+test("independent synchronous requests cannot form a wait cycle", () => {
+  const s = setup(),
+    a = s.createSession(),
+    b = s.createSession(),
+    c = s.createSession();
+  const ia = s.enqueue(a.id, "a", { kind: "gui" });
+  const ib = s.enqueue(b.id, "b", { kind: "gui" });
+  const ic = s.enqueue(c.id, "c", { kind: "gui" });
+  s.delegate(a.id, b.id, ia.id, "ab");
+  s.delegate(b.id, c.id, ib.id, "bc");
+  expect(() => s.delegate(c.id, a.id, ic.id, "ca")).toThrow("相互等待");
+  expect(s.inputs(a.id)).toHaveLength(1);
+});
+test("restart cancels queued synchronous children of interrupted inputs without replay", () => {
+  const s = setup(),
+    source = s.createSession(),
+    target = s.createSession();
+  const input = s.enqueue(source.id, "task", {
+    kind: "feishu",
+    connectionId: "fixture",
+    chatId: "dm",
+    messageId: "original",
+  });
+  s.claim(source.id);
+  const waiting = s.delegate(source.id, target.id, input.id, "wait");
+  const sent = s.delegate(source.id, target.id, input.id, "send", "none");
+  s.recover();
+  expect(s.input(input.id)?.status).toBe("interrupted");
+  expect(s.input(waiting.targetInputId)?.status).toBe("cancelled");
+  expect(s.input(sent.targetInputId)?.status).toBe("queued");
+  expect(s.inputs(source.id)).toHaveLength(1);
+  s.recover();
+  expect(s.pendingReplies()).toHaveLength(1);
+  expect(s.pendingReplies()[0]?.source.messageId).toBe("original");
+  expect(s.pendingReplies()[0]?.text).toContain("中断");
 });
 test("public connection listing does not expose credentials", () => {
   const s = setup();

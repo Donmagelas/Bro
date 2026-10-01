@@ -10,6 +10,9 @@ let requests = 0;
 let lastTools: string[] = [];
 let lastSystem = "",
   judgments = 0;
+let childGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+let childObserved: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+let waitingTool: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 const provider = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
@@ -58,7 +61,8 @@ const provider = Bun.serve({
       .filter((m) => m.role === "tool").length;
     let call: any,
       text = "BRO_PLAIN_COMPLETE";
-    if (prompt.includes("交办结果")) text = "BRO_CORRELATED_RESULT";
+    if (prompt.includes("BRO_SUPPLEMENT"))
+      text = "BRO_WITH_SUPPLEMENT: BRO_CHILD_COMPLETE";
     else if (prompt.includes("BRO_BROWSER")) {
       if (!toolCount)
         call = {
@@ -93,16 +97,44 @@ const provider = Bun.serve({
       else if (toolCount === 2)
         call = { name: "read", args: { path: "skill://bro-probe" } };
       else text = "BRO_RESOURCE_COMPLETE";
+    } else if (prompt.includes("BRO_EXTERNAL")) {
+      if (toolCount === 0) call = { name: "bro_wait", args: { seconds: 1 } };
+      else if (toolCount === 1)
+        call = {
+          name: "read",
+          args: { path: join(root, "workspaces", "external.txt") },
+        };
+      else {
+        if (!JSON.stringify(messages).includes("EXTERNAL_ACTUAL_RESULT"))
+          throw new Error("No external result was read");
+        text = "BRO_EXTERNAL_COMPLETE: EXTERNAL_ACTUAL_RESULT";
+      }
     } else if (prompt.includes("BRO_DELEGATE")) {
       if (!toolCount)
         call = {
           name: "bro_send_session",
           args: {
             sessionId: prompt.match(/BRO_DELEGATE ([a-f0-9-]+)/)?.[1],
-            text: "BRO_CHILD write proof",
+            text: prompt.includes("BRO_TARGET_WAIT")
+              ? "BRO_WAIT"
+              : prompt.match(/BRO_NEST ([a-f0-9-]+)/)
+                ? `BRO_DELEGATE ${prompt.match(/BRO_NEST ([a-f0-9-]+)/)![1]}`
+                : "BRO_CHILD write proof",
+            waitForResult: !prompt.includes("BRO_SEND_ONLY"),
           },
         };
-      else text = "交办已接收；来源会话可以继续聊天。";
+      else {
+        const result = JSON.stringify(
+          messages.slice(lastIndex).filter((m: any) => m.role === "tool"),
+        );
+        if (result.includes("BRO_CHILD_COMPLETE"))
+          text = "BRO_CORRELATED_RESULT: BRO_CHILD_COMPLETE";
+        else if (result.includes("queued")) text = "BRO_SENT_ONLY";
+        else text = "BRO_CHILD_FAILED: " + result;
+      }
+    } else if (prompt.includes("BRO_WAIT")) {
+      if (!toolCount) call = { name: "bro_wait", args: { seconds: 30 } };
+      else text = "BRO_WAIT_COMPLETE";
     } else if (prompt.includes("BRO_CHILD")) {
       if (!toolCount)
         call = {
@@ -112,22 +144,36 @@ const provider = Bun.serve({
             content: "CHILD_EXECUTED",
           },
         };
-      else text = "BRO_CHILD_COMPLETE";
+      else {
+        childObserved?.resolve();
+        await childGate?.promise;
+        text = "BRO_CHILD_COMPLETE";
+      }
     } else if (prompt.includes("交办结果")) text = "BRO_CORRELATED_RESULT";
+    const calls = call ? [call] : [];
+    if (
+      call?.name === "bro_send_session" &&
+      prompt.includes("BRO_SERIAL_PROOF")
+    )
+      calls.push({
+        name: "write",
+        args: {
+          path: join(root, "workspaces", "source-after-wait.txt"),
+          content: "SOURCE_RESUMED",
+        },
+      });
     const delta = call
       ? {
           role: "assistant",
-          tool_calls: [
-            {
-              index: 0,
-              id: `call_${requests}`,
-              type: "function",
-              function: {
-                name: call.name,
-                arguments: JSON.stringify(call.args),
-              },
+          tool_calls: calls.map((c, index) => ({
+            index,
+            id: `call_${requests}_${index}`,
+            type: "function",
+            function: {
+              name: c.name,
+              arguments: JSON.stringify(c.args),
             },
-          ],
+          })),
         }
       : { role: "assistant", content: text };
     const frame = {
@@ -144,6 +190,19 @@ const provider = Bun.serve({
   },
 });
 const host = createHost(root, "probe");
+async function bounded<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timeout: ${label}`)), 60000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 async function api(path: string, body: any, method = "POST") {
   const r = await fetch(`http://127.0.0.1:${host.server.port}${path}`, {
     method,
@@ -265,18 +324,56 @@ try {
     throw new Error(
       "Missing attachment was not rejected before model execution",
     );
-  await send(source.id, `BRO_DELEGATE ${target.id}`);
-  const start = Date.now();
-  while (Date.now() - start < 120000) {
-    const result = host.store
-      .inputs(source.id)
-      .find((i) => i.id.startsWith("result:"));
-    if (result) {
-      await wait(result.id);
-      break;
-    }
-    await Bun.sleep(100);
-  }
+  childGate = Promise.withResolvers<void>();
+  childObserved = Promise.withResolvers<void>();
+  const original = host.store.enqueue(
+    source.id,
+    `BRO_DELEGATE ${target.id} BRO_SERIAL_PROOF`,
+    {
+      kind: "feishu",
+      connectionId: "fixture",
+      senderId: "owner",
+      chatId: "dm",
+      messageId: "original",
+    },
+  );
+  host.runtimes.wake(source.id);
+  await bounded(childObserved.promise, "same-directory child result");
+  const later = host.store.enqueue(source.id, "BRO_PLAIN", { kind: "gui" });
+  host.runtimes.wake(source.id);
+  if (
+    host.store.input(original.id)?.status !== "running" ||
+    host.store.input(later.id)?.status !== "queued" ||
+    host.store.db.query("SELECT id FROM outbox WHERE id=?").get(original.id)
+  )
+    throw new Error("Waiting source replied early or consumed a later input");
+  if (
+    await Bun.file(join(root, "workspaces", "source-after-wait.txt")).exists()
+  )
+    throw new Error(
+      "Source tool ran concurrently while its directory was yielded",
+    );
+  childGate.resolve();
+  await wait(original.id);
+  await wait(later.id);
+  childGate = undefined;
+  if (
+    readFileSync(join(root, "workspaces", "source-after-wait.txt"), "utf8") !==
+    "SOURCE_RESUMED"
+  )
+    throw new Error(
+      "Source tool did not resume after reacquiring its directory",
+    );
+  const reply = host.store.db
+    .query("SELECT text FROM outbox WHERE id=?")
+    .get(original.id) as any;
+  if (
+    !reply?.text.includes("BRO_CHILD_COMPLETE") ||
+    host.store.inputs(source.id).some((i) => i.id.startsWith("result:"))
+  )
+    throw new Error(
+      "Inline result missing, duplicated, or lost original reply correlation",
+    );
   if (
     readFileSync(join(root, "workspaces", "child.txt"), "utf8") !==
     "CHILD_EXECUTED"
@@ -288,6 +385,139 @@ try {
     )
   )
     throw new Error("Missing return to source");
+  // Send-only must finish before the target result, without a later notification.
+  childGate = Promise.withResolvers<void>();
+  childObserved = Promise.withResolvers<void>();
+  await send(source.id, `BRO_DELEGATE ${target.id} BRO_SEND_ONLY`);
+  await bounded(childObserved.promise, "send-only child result");
+  childGate.resolve();
+  await wait(host.store.inputs(target.id).at(-1)!.id);
+  childGate = undefined;
+  // Steer stays accepted during the wait and reaches the next safe tool boundary.
+  childGate = Promise.withResolvers<void>();
+  childObserved = Promise.withResolvers<void>();
+  const steered = host.store.enqueue(source.id, `BRO_DELEGATE ${target.id}`, {
+    kind: "gui",
+  });
+  host.runtimes.wake(source.id);
+  await bounded(childObserved.promise, "steered child result");
+  await host.runtimes.steer(source.id, {
+    text: "BRO_SUPPLEMENT",
+    source: { kind: "gui" },
+    createdAt: Date.now(),
+  });
+  childGate.resolve();
+  await wait(steered.id);
+  childGate = undefined;
+  if (
+    !JSON.stringify(await host.runtimes.history(source.id)).includes(
+      "BRO_WITH_SUPPLEMENT",
+    )
+  )
+    throw new Error("Steer was lost during delegation wait");
+  // Cancelling the source cancels its running child and the cancellable timer.
+  const hostCall = host.runtimes.hostCall!;
+  waitingTool = Promise.withResolvers<void>();
+  host.runtimes.hostCall = async (...args) => {
+    if (args[2] === "bro_wait") waitingTool?.resolve();
+    return hostCall(...args);
+  };
+  const stopped = host.store.enqueue(
+    source.id,
+    `BRO_DELEGATE ${target.id} BRO_TARGET_WAIT`,
+    { kind: "gui" },
+  );
+  host.runtimes.wake(source.id);
+  await bounded(waitingTool.promise, "child starts wait");
+  await host.runtimes.stop(source.id);
+  const stopStart = Date.now();
+  while (
+    host.store.input(stopped.id)?.status === "running" &&
+    Date.now() - stopStart < 5000
+  )
+    await Bun.sleep(50);
+  if (
+    host.store.input(stopped.id)?.status !== "cancelled" ||
+    host.store.inputs(target.id).at(-1)?.status !== "cancelled"
+  )
+    throw new Error("Source stop did not cancel its waiting child");
+  // The child can itself delegate in the same directory without deadlocking.
+  const nested = host.store.createSession({
+    title: "Nested",
+    connectionId: "fixture",
+  });
+  await send(source.id, `BRO_DELEGATE ${target.id} BRO_NEST ${nested.id}`);
+  if (
+    host.store
+      .delegations()
+      .slice(-2)
+      .some((d) => d.status !== "completed")
+  )
+    throw new Error("Nested same-directory delegation did not finish");
+  // Cancelling a queued child must leave unrelated target work alone.
+  waitingTool = Promise.withResolvers<void>();
+  const unrelated = host.store.enqueue(target.id, "BRO_WAIT", { kind: "gui" });
+  host.runtimes.wake(target.id);
+  await bounded(waitingTool.promise, "unrelated target wait");
+  // Use another directory so the source can enqueue while target holds its lock.
+  const independent = host.store.createSession({
+    title: "Independent",
+    connectionId: "fixture",
+    cwd: root,
+  });
+  const queueStop = host.store.enqueue(
+    independent.id,
+    `BRO_DELEGATE ${target.id}`,
+    { kind: "gui" },
+  );
+  host.runtimes.wake(independent.id);
+  const queuedStart = Date.now();
+  while (
+    !host.store.delegations().some((d) => d.originInputId === queueStop.id) &&
+    Date.now() - queuedStart < 30000
+  )
+    await Bun.sleep(50);
+  const queuedChild = host.store
+    .delegations()
+    .find((d) => d.originInputId === queueStop.id);
+  if (!queuedChild || queuedChild.status !== "queued")
+    throw new Error("Child wasn't queued behind unrelated task");
+  await host.runtimes.stop(independent.id);
+  if (
+    host.store.input(unrelated.id)?.status !== "running" ||
+    host.store.input(queuedChild.targetInputId)?.status !== "cancelled"
+  )
+    throw new Error(
+      "Stopping queued delegation interrupted unrelated target work",
+    );
+  await host.runtimes.stop(target.id);
+  // A delayed external result is read before the same source input completes.
+  waitingTool = Promise.withResolvers<void>();
+  const external = host.store.enqueue(source.id, "BRO_EXTERNAL", {
+    kind: "gui",
+  });
+  host.runtimes.wake(source.id);
+  await bounded(waitingTool.promise, "external result wait");
+  if (host.store.input(external.id)?.status !== "running")
+    throw new Error("External wait ended early");
+  writeFileSync(
+    join(root, "workspaces", "external.txt"),
+    "EXTERNAL_ACTUAL_RESULT",
+  );
+  await wait(external.id);
+  host.runtimes.hostCall = hostCall;
+  // Initialization failures return to the original turn instead of waiting forever.
+  const broken = host.store.createSession({
+    title: "Broken connection",
+    connectionId: "missing",
+  });
+  await send(source.id, `BRO_DELEGATE ${broken.id}`);
+  if (
+    !JSON.stringify(await host.runtimes.history(source.id)).includes(
+      "BRO_CHILD_FAILED",
+    )
+  )
+    throw new Error("Target initialization failure did not reach source");
   const plugin = host.state().resources.find((r) => r.kind === "plugin")!;
   await api("/resources", { id: plugin.id, action: "toggle", enabled: false });
   await send(source.id, "BRO_PLAIN");
@@ -360,7 +590,9 @@ try {
         "native MCP call",
         "explicit Skill read",
         "exact attachment reaches model and read tool; removed attachment rejected before model execution",
-        "separate-process cross-session execution + return",
+        "same-directory inline delegation + one correlated reply, queued later input, send-only, steer, nested delegation",
+        "stop running/queued child without stopping unrelated work; target initialization failure returns",
+        "cancellable external wait + read actual delayed result before replying",
         "disabled plugin removed at next boundary",
         "shadow/experimental/normal Skill selection through real OMP provider hooks",
       ],
@@ -371,6 +603,7 @@ try {
   console.error("Probe root", root);
   process.exitCode = 1;
 } finally {
+  childGate?.resolve();
   await host.close();
   await provider.stop(true);
 }
