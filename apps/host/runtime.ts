@@ -366,8 +366,15 @@ export class Runtimes {
       if ((await this.call(worker, "activity")).busy)
         throw new Error("会话仍有后台工具或子任务；结束后再更改运行配置");
       worker.releasing = true;
-      await this.call(worker, "dispose", {}, 30000);
-      await worker.process.exited;
+      try {
+        await this.call(worker, "dispose", {}, 30000);
+      } catch (error) {
+        // The process may exit before its final IPC response is delivered
+        // (notably on Windows). For requested disposal, clean exit is success.
+        if (worker.process.exitCode !== 0) throw error;
+      }
+      const code = await worker.process.exited;
+      if (code !== 0) throw new Error(`会话运行进程退出 (${code})`);
       if (this.workers.get(id) === worker) this.workers.delete(id);
     }
     this.stale.delete(id);

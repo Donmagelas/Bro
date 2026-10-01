@@ -52,6 +52,79 @@ afterEach(async () => {
   }
 });
 
+test("retiring a worker accepts a clean exit without an IPC acknowledgement but rejects abnormal exits", async () => {
+  const host = setup();
+  const runtime = new Runtimes(
+    host.store,
+    () => {},
+    () => {},
+    () => {},
+  );
+  for (const code of [0, 7]) {
+    const session = host.store.createSession({ title: "Retirement probe" });
+    const calls = new Map<string, any>();
+    let ready!: () => void;
+    const workerReady = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
+    // Exercise the real IPC ordering: the child exits on dispose without sending
+    // a response. Exit 0 is completion; a nonzero exit must still fail retirement.
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `
+      process.on('message', message => {
+        if (message.type === 'activity') process.send({id:message.id,result:{busy:false}});
+        if (message.type === 'dispose') process.exit(${code});
+      });
+      process.send({ready:true});
+    `,
+      ],
+      {
+        stdout: "ignore",
+        stderr: "ignore",
+        ipc(message: any) {
+          if (message.ready) ready();
+          const call = calls.get(message.id);
+          if (call) {
+            clearTimeout(call.timer);
+            calls.delete(message.id);
+            call.resolve(message.result);
+          }
+        },
+      },
+    );
+    void child.exited.then((exitCode) => {
+      for (const call of calls.values()) {
+        clearTimeout(call.timer);
+        call.reject(new Error(`会话运行进程退出 (${exitCode})`));
+      }
+      calls.clear();
+    });
+    (runtime as any).workers.set(session.id, {
+      process: child,
+      ready: workerReady,
+      calls,
+    });
+    try {
+      if (code === 0) {
+        await runtime.release(session.id);
+        expect((runtime as any).workers.has(session.id)).toBe(false);
+        expect(host.store.session(session.id)!.error).toBeNull();
+      } else
+        await expect(runtime.release(session.id)).rejects.toThrow(
+          "会话运行进程退出 (7)",
+        );
+      expect(await child.exited).toBe(code);
+    } finally {
+      child.kill();
+      await child.exited;
+      (runtime as any).workers.delete(session.id);
+    }
+  }
+});
+
 test("rules editor writes the actual global and project context files and refreshes runtimes", async () => {
   const host = setup();
   const projectDir = join(host.store.root, "project");
