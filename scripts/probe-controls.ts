@@ -14,6 +14,14 @@ let compacting = false,
 const seen: string[] = [];
 const requests: { model: string; effort?: string }[] = [];
 let finishSwitch: (() => void) | undefined;
+let finishFirst!: () => void;
+const firstResponse = new Promise<void>((resolve) => {
+  finishFirst = resolve;
+});
+let finishCompaction!: () => void;
+const compactionResponse = new Promise<void>((resolve) => {
+  finishCompaction = resolve;
+});
 const provider = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
@@ -25,9 +33,10 @@ const provider = Bun.serve({
       typeof last.content === "string"
         ? last.content
         : last.content.map((c: any) => c.text || "").join("\n");
-    if (compacting) {
+    const isCompaction = compacting;
+    if (isCompaction) {
       compactionRequest = true;
-      await Bun.sleep(500);
+      await compactionResponse;
     }
     const marker =
       ["FIRST", "STEER", "SECOND", "CANCEL", "SHUTDOWN"].find((x) =>
@@ -38,8 +47,8 @@ const provider = Bun.serve({
       await new Promise<void>((resolve) => {
         finishSwitch = resolve;
       });
-    if (marker === "FIRST") await Bun.sleep(700);
-    if (marker === "CANCEL" || marker === "SHUTDOWN")
+    if (marker === "FIRST" && !isCompaction) await firstResponse;
+    if (!isCompaction && (marker === "CANCEL" || marker === "SHUTDOWN"))
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, 10000);
         req.signal.addEventListener(
@@ -61,7 +70,7 @@ const provider = Bun.serve({
           index: 0,
           delta: {
             role: "assistant",
-            content: compacting
+            content: isCompaction
               ? "Summary: the completed first and steer tasks are preserved; queued work remains to run."
               : `DONE_${marker} ` +
                 Array.from(
@@ -86,6 +95,10 @@ async function until(label: string, condition: () => boolean) {
   console.log(`Waiting: ${label}`);
   const start = Date.now();
   while (!condition()) {
+    const failed = host.store
+      .sessions()
+      .find((s) => s.status === "error" || s.status === "interrupted");
+    if (failed) throw new Error(`${label}: ${failed.error || failed.status}`);
     if (Date.now() - start > 45000) throw new Error(`Timeout: ${label}`);
     await Bun.sleep(25);
   }
@@ -114,6 +127,10 @@ try {
   const first = host.store.enqueue(session.id, "BRO_FIRST", { kind: "gui" });
   host.runtimes.wake(session.id);
   await until("first request received", () => seen.includes("FIRST"));
+  // Exercise a slow coordinator: this must not race a fixed provider delay.
+  await Bun.sleep(1000);
+  if (host.store.input(first.id)?.status !== "running")
+    throw new Error("First response completed before steer was submitted");
   const second = host.store.enqueue(session.id, "BRO_SECOND", { kind: "gui" });
   host.runtimes.wake(session.id);
   await host.runtimes.steer(session.id, {
@@ -126,6 +143,8 @@ try {
     ],
     attachments: [],
   });
+  // Keep the first response pending until the steer is accepted by the worker.
+  finishFirst();
   await until(
     "queued second input completed",
     () => host.store.input(second.id)?.status === "completed",
@@ -164,6 +183,8 @@ try {
   host.runtimes.wake(session.id);
   if (host.store.input(queuedDuringCompact.id)?.status !== "queued")
     throw new Error("Queued task raced manual compaction");
+  // Release the summary only after the queue-during-compaction check has run.
+  finishCompaction();
   await maintenance;
   compacting = false;
   await until(
@@ -291,21 +312,22 @@ try {
       requests,
       compacting,
       compactionRequest,
-      sessions: host.store
-        .sessions()
-        .map((session) => ({
-          id: session.id,
-          status: session.status,
-          error: session.error,
-          inputs: host.store
-            .inputs(session.id)
-            .map(({ text, status, error }) => ({ text, status, error })),
-        })),
+      sessions: host.store.sessions().map((session) => ({
+        id: session.id,
+        status: session.status,
+        error: session.error,
+        inputs: host.store
+          .inputs(session.id)
+          .map(({ text, status, error }) => ({ text, status, error })),
+      })),
     }),
   );
   console.error("Probe root", root);
   process.exitCode = 1;
 } finally {
+  finishFirst();
+  finishCompaction();
+  finishSwitch?.();
   await host.close();
   await provider.stop(true);
 }
