@@ -143,6 +143,17 @@ export function createHost(
     const input = store.input(inputId);
     if (!input || input.sessionId !== sessionId)
       throw new Error("无有效任务来源");
+    if (action === "bro_send_file") {
+      if (input.status !== "running")
+        throw new Error("当前任务已结束，未发送文件");
+      return feishu.sendFile(
+        store.replySource(input),
+        resolve(
+          store.session(sessionId)!.cwd,
+          str(args.path, "文件路径", 4096),
+        ),
+      );
+    }
     if (action === "bro_computer") {
       validateComputerRequest(args);
       if (args.resume)

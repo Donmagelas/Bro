@@ -37,6 +37,7 @@ function setup(
     resource?: (payload: any) => Promise<any>;
     message?: (payload: any) => Promise<any>;
     reply?: (payload: any) => Promise<any>;
+    file?: (payload: any) => Promise<any>;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "bro-feishu-receipt-"));
@@ -56,6 +57,7 @@ function setup(
   (feishu as any).client = {
     request,
     im: {
+      file: { create: transport.file },
       messageResource: { get: transport.resource },
       message: { get: transport.message, reply: transport.reply },
     },
@@ -72,6 +74,160 @@ function setup(
     },
   };
 }
+
+test("file delivery uploads exact bytes and replies natively to the original message once", async () => {
+  const uploads: any[] = [],
+    replies: any[] = [];
+  const h = setup(async () => ({ code: 0 }), {
+    file: async (payload) => {
+      uploads.push(payload);
+      return { file_key: "uploaded-key" };
+    },
+    reply: async (payload) => {
+      replies.push(payload);
+      return { code: 0, data: { message_id: "file-message" } };
+    },
+  });
+  try {
+    const path = join(h.store.root, "测试文档.md");
+    writeFileSync(path, "# Native file\n中文正文\n");
+    const source = {
+      kind: "feishu" as const,
+      connectionId: "app",
+      messageId: "original",
+      chatId: "group",
+    };
+    const [first, second] = await Promise.all([
+      h.feishu.sendFile(source, path),
+      h.feishu.sendFile(source, path),
+    ]);
+    expect(first.status).toBe("sent");
+    expect(first.messageId).toBe("file-message");
+    expect(second.replyId).toBe(first.replyId);
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0].data.file_type).toBe("stream");
+    expect(uploads[0].data.file_name).toBe("测试文档.md");
+    expect(uploads[0].data.file.toString()).toBe("# Native file\n中文正文\n");
+    expect(replies).toHaveLength(1);
+    expect(replies[0].path.message_id).toBe("original");
+    expect(replies[0].data.msg_type).toBe("file");
+    expect(JSON.parse(replies[0].data.content)).toEqual({
+      file_key: "uploaded-key",
+    });
+  } finally {
+    await h.close();
+  }
+});
+
+test("upload failures do not send a message; explicit retry uses saved bytes", async () => {
+  let failure = true;
+  const uploads: string[] = [],
+    replies: any[] = [];
+  const h = setup(async () => ({ code: 0 }), {
+    file: async (payload) => {
+      uploads.push(payload.data.file.toString());
+      if (failure) throw new Error("Upload failed");
+      return { file_key: "key" };
+    },
+    reply: async (payload) => {
+      replies.push(payload);
+      return { code: 0, data: { message_id: "ok" } };
+    },
+  });
+  try {
+    const path = join(h.store.root, "report.md");
+    writeFileSync(path, "ORIGINAL");
+    const source = {
+      kind: "feishu" as const,
+      connectionId: "app",
+      messageId: "original",
+    };
+    await expect(h.feishu.sendFile(source, path)).rejects.toThrow("未发送成功");
+    await expect(h.feishu.sendFile(source, path)).rejects.toThrow("未发送成功");
+    expect(uploads).toHaveLength(1);
+    expect(replies).toHaveLength(0);
+    const row = h.store.replies()[0] as any;
+    expect(row.status).toBe("failed");
+    writeFileSync(path, "CHANGED");
+    failure = false;
+    h.store.replyStatus(row.id, "pending");
+    await h.feishu.flush();
+    expect(uploads).toEqual(["ORIGINAL", "ORIGINAL"]);
+    expect(replies).toHaveLength(1);
+  } finally {
+    await h.close();
+  }
+});
+
+test("uncertain file replies are not retried implicitly and preserve upload key and UUID", async () => {
+  let uploads = 0,
+    failure = true;
+  const replies: any[] = [];
+  const h = setup(async () => ({ code: 0 }), {
+    file: async () => {
+      uploads++;
+      return { file_key: "key" };
+    },
+    reply: async (payload) => {
+      replies.push(payload);
+      if (failure) throw new Error("Connection lost after sending");
+      return { code: 0, data: { message_id: "ok" } };
+    },
+  });
+  try {
+    const path = join(h.store.root, "report.md");
+    writeFileSync(path, "CONTENT");
+    const source = {
+      kind: "feishu" as const,
+      connectionId: "app",
+      messageId: "original",
+    };
+    await expect(h.feishu.sendFile(source, path)).rejects.toThrow(
+      "发送结果不明",
+    );
+    await expect(h.feishu.sendFile(source, path)).rejects.toThrow(
+      "发送结果不明",
+    );
+    expect(replies).toHaveLength(1);
+    const row = h.store.replies()[0] as any;
+    expect(row.status).toBe("uncertain");
+    failure = false;
+    h.store.replyStatus(row.id, "pending");
+    await h.feishu.flush();
+    expect(uploads).toBe(1);
+    expect(replies[0].data.uuid).toBe(replies[1].data.uuid);
+  } finally {
+    await h.close();
+  }
+});
+
+test("file delivery refuses unsupported source, wrong bot, empty file, or directory", async () => {
+  const upload = spyOn({ run: async () => ({ file_key: "key" }) }, "run");
+  const h = setup(async () => ({ code: 0 }), { file: upload });
+  try {
+    const path = join(h.store.root, "empty.md");
+    writeFileSync(path, "");
+    const source = {
+      kind: "feishu" as const,
+      connectionId: "app",
+      messageId: "original",
+    };
+    await expect(h.feishu.sendFile({ kind: "gui" }, path)).rejects.toThrow(
+      "没有可回复",
+    );
+    await expect(
+      h.feishu.sendFile({ ...source, connectionId: "other" }, path),
+    ).rejects.toThrow("连接不可用");
+    await expect(h.feishu.sendFile(source, path)).rejects.toThrow("非空");
+    await expect(h.feishu.sendFile(source, h.store.root)).rejects.toThrow(
+      "普通文件",
+    );
+    expect(upload).not.toHaveBeenCalled();
+  } finally {
+    await h.close();
+    upload.mockRestore();
+  }
+});
 
 test("Feishu acknowledges accepted DMs and group mentions once, after durable ingestion", async () => {
   const requests: any[] = [];

@@ -73,6 +73,16 @@ const provider = Bun.serve({
           },
         };
       else text = "BRO_BROWSER_COMPLETE";
+    } else if (prompt.includes("BRO_SEND_FILE")) {
+      if (!prompt.includes("当前输入渠道：飞书机器人"))
+        throw new Error("Feishu source context missing");
+      if (!toolCount)
+        call = { name: "bro_send_file", args: { path: "outgoing.md" } };
+      else {
+        if (!JSON.stringify(messages).includes("fixture-file-message"))
+          throw new Error("File receipt missing from tool result");
+        text = "BRO_FILE_SENT";
+      }
     } else if (prompt.includes("BRO_ATTACHMENT")) {
       if (!toolCount)
         call = {
@@ -578,6 +588,50 @@ try {
     throw new Error(
       "Normal mode did not restore the original catalog without judgment requests",
     );
+  // Real OMP -> host -> outbox, with only Feishu transport stubbed.
+  const uploaded: any[] = [],
+    delivered: any[] = [];
+  host.feishu.status = { configured: true, connected: true, appId: "fixture" };
+  (host.feishu as any).client = {
+    im: {
+      file: {
+        create: async (payload: any) => {
+          uploaded.push(payload);
+          return { file_key: "fixture-key" };
+        },
+      },
+      message: {
+        reply: async (payload: any) => {
+          delivered.push(payload);
+          return { code: 0, data: { message_id: "fixture-file-message" } };
+        },
+      },
+    },
+  };
+  writeFileSync(
+    join(root, "workspaces", "outgoing.md"),
+    "# EXACT_OUTGOING_MARKDOWN\n中文\n",
+  );
+  const outgoing = host.store.enqueue(source.id, "BRO_SEND_FILE", {
+    kind: "feishu",
+    connectionId: "fixture",
+    messageId: "file-request",
+    chatId: "dm",
+  });
+  host.runtimes.wake(source.id);
+  await wait(outgoing.id);
+  await host.feishu.flush();
+  if (
+    uploaded.length !== 1 ||
+    uploaded[0].data.file.toString() !== "# EXACT_OUTGOING_MARKDOWN\n中文\n"
+  )
+    throw new Error("Outgoing bytes differ");
+  const fileMessages = delivered.filter((x) => x.data.msg_type === "file");
+  if (
+    fileMessages.length !== 1 ||
+    fileMessages[0].path.message_id !== "file-request"
+  )
+    throw new Error("File not correlated to original chat message");
   console.log(
     JSON.stringify({
       passed: true,
@@ -589,6 +643,7 @@ try {
         "native plugin install + call",
         "native MCP call",
         "explicit Skill read",
+        "native Feishu file tool delivers exact Markdown bytes to the original request and receives a message ID",
         "exact attachment reaches model and read tool; removed attachment rejected before model execution",
         "same-directory inline delegation + one correlated reply, queued later input, send-only, steer, nested delegation",
         "stop running/queued child without stopping unrelated work; target initialization failure returns",

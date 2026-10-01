@@ -131,6 +131,22 @@ test("inline and send-only results never enqueue a second source turn", () => {
   }
   expect(s.inputs(source.id)).toHaveLength(1);
 });
+test("delegated file delivery resolves the original Feishu message through nested tasks", () => {
+  const s = setup(),
+    a = s.createSession(),
+    b = s.createSession(),
+    c = s.createSession();
+  const source = {
+    kind: "feishu" as const,
+    connectionId: "bot",
+    messageId: "original",
+    chatId: "group",
+  };
+  const original = s.enqueue(a.id, "send file", source);
+  const first = s.delegate(a.id, b.id, original.id, "produce file");
+  const second = s.delegate(b.id, c.id, first.targetInputId, "send file");
+  expect(s.replySource(s.input(second.targetInputId)!)).toEqual(source);
+});
 test("independent synchronous requests cannot form a wait cycle", () => {
   const s = setup(),
     a = s.createSession(),

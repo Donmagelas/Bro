@@ -76,6 +76,10 @@ const tools = [
   ["bro_sessions", "列出或查询 Bro 其他会话的标题、状态和工作目录。"],
   ["bro_read_session", "读取指定 Bro 会话的相关历史。"],
   [
+    "bro_send_file",
+    "把本地文件作为机器人文件消息直接回复本次请求所在的飞书对话，保留文件名并可下载。只需 path；由宿主绑定原收件对话，不能指定或猜测联系人。支持 .md 等非空文件，最大 30 MB。返回 sent 和消息 ID 才表示发送成功；失败或结果不明时报告错误，不改用 Computer Use、个人账号或桌面附件按钮重发。",
+  ],
+  [
     "bro_send_session",
     "向另一 Bro 会话排队发送任务，默认在当前轮等待其最终结果（waitForResult=true）。仅当用户只要求发一条消息时设为 false，入队后即返回且不另行通知。等待时后续消息排队；补充说明在工具安全返回后处理。不要把 queued 当成执行完成。",
   ],
@@ -181,28 +185,36 @@ async function initialize(value: typeof config) {
     description,
     loadMode: "essential",
     concurrency:
-      name === "bro_send_session" || name === "bro_wait"
+      name === "bro_send_session" ||
+      name === "bro_wait" ||
+      name === "bro_send_file"
         ? "exclusive"
         : "shared",
-    approval: ["bro_stop_session", "bro_send_session"].includes(name)
+    approval: [
+      "bro_stop_session",
+      "bro_send_session",
+      "bro_send_file",
+    ].includes(name)
       ? "exec"
       : "read",
     parameters:
-      name === "bro_send_session"
-        ? Type.Object({
-            sessionId: Type.String(),
-            text: Type.String(),
-            waitForResult: Type.Optional(Type.Boolean()),
-          })
-        : name === "bro_wait"
+      name === "bro_send_file"
+        ? Type.Object({ path: Type.String() })
+        : name === "bro_send_session"
           ? Type.Object({
-              seconds: Type.Number({ minimum: 1, maximum: 30 }),
+              sessionId: Type.String(),
+              text: Type.String(),
+              waitForResult: Type.Optional(Type.Boolean()),
             })
-          : Type.Object({
-              sessionId: Type.Optional(Type.String()),
-              text: Type.Optional(Type.String()),
-              query: Type.Optional(Type.String()),
-            }),
+          : name === "bro_wait"
+            ? Type.Object({
+                seconds: Type.Number({ minimum: 1, maximum: 30 }),
+              })
+            : Type.Object({
+                sessionId: Type.Optional(Type.String()),
+                text: Type.Optional(Type.String()),
+                query: Type.Optional(Type.String()),
+              }),
     async execute(_id: string, args: any) {
       if (
         name === "bro_send_session" &&
@@ -470,6 +482,9 @@ async function request(message: RpcMessage) {
 function prepareInput(input: Input) {
   const images = [];
   let text = input.text;
+  if (input.source?.kind === "feishu")
+    text +=
+      "\n\n[当前输入渠道：飞书机器人。最终文字回复自动回到本条消息所在的原对话。需要交付文件时直接调用 bro_send_file；不要操作飞书/Bro 桌面窗口、查找自己的个人账号或使用 GUI 附件按钮来发送。]";
   for (const attachment of input.attachments || []) {
     try {
       if (!statSync(attachment.path).isFile()) throw new Error("不是文件");

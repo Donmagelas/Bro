@@ -74,6 +74,11 @@ export interface Attachment {
   name: string;
   mimeType: string;
 }
+export interface ReplyFile extends Attachment {
+  sha256: string;
+  fileKey?: string;
+  messageId?: string;
+}
 export interface Annotation {
   messageId: string;
   quote: string;

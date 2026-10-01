@@ -1,7 +1,13 @@
 import * as lark from "@larksuiteoapi/node-sdk";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
-import { rmSync, statSync } from "node:fs";
+import {
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import type { Store } from "../../apps/host/store";
 import type { Attachment, Source } from "../contracts";
 
@@ -94,10 +100,19 @@ export class Feishu {
       botId: config.botId,
     };
     try {
+      const httpInstance: lark.HttpInstance = Object.create(
+        lark.defaultHttpInstance,
+      );
+      httpInstance.request = ((options: lark.HttpRequestOptions<unknown>) =>
+        lark.defaultHttpInstance.request({
+          ...options,
+          timeout: options.timeout ?? 60000,
+        })) as lark.HttpInstance["request"];
       this.client = new lark.Client({
         appId: config.appId,
         appSecret: config.appSecret,
         loggerLevel: lark.LoggerLevel.error,
+        httpInstance,
       });
       if (!config.botId) {
         const info = (await this.client.request({
@@ -339,6 +354,73 @@ export class Feishu {
       },
     });
   }
+  async sendFile(source: Source, path: string) {
+    if (source.kind !== "feishu" || !source.messageId)
+      throw new Error(
+        "当前请求没有可回复的飞书消息；不会自行搜索联系人或改用桌面发送。",
+      );
+    if (
+      this.stopped ||
+      !this.client ||
+      source.connectionId !== this.status.appId
+    )
+      throw new Error("原请求的飞书连接不可用，文件未发送。");
+    const info = statSync(path);
+    if (!info.isFile() || info.size === 0 || info.size > 30 * 1024 * 1024)
+      throw new Error("只能发送非空的普通文件，大小不能超过 30 MB。");
+    const bytes = readFileSync(path);
+    if (!bytes.length || bytes.length > 30 * 1024 * 1024)
+      throw new Error("文件大小已变化，须为非空且不超过 30 MB。");
+    const name = basename(path);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const id =
+      "file:" +
+      createHash("sha256")
+        .update(
+          JSON.stringify([source.connectionId, source.messageId, name, sha256]),
+        )
+        .digest("hex");
+    if (!this.store.reply(id)) {
+      // Persist the exact bytes selected by this task, so retries cannot send a
+      // changed file or depend on a temporary producer's lifetime.
+      const directory = join(this.store.root, "attachments", "outgoing");
+      mkdirSync(directory, { recursive: true });
+      const saved = join(directory, id.slice(5));
+      writeFileSync(saved, bytes, { mode: 0o600 });
+      this.store.addFileReply(id, source, {
+        path: saved,
+        name,
+        mimeType: "application/octet-stream",
+        sha256,
+      });
+    }
+    while (
+      ["pending", "sending"].includes(this.store.reply(id)?.status || "")
+    ) {
+      if (
+        this.stopped ||
+        !this.client ||
+        source.connectionId !== this.status.appId
+      )
+        throw new Error(
+          `飞书连接已断开，发送待处理；请勿改用桌面重复发送。回复 ID：${id}`,
+        );
+      if (this.store.reply(id)?.status === "sending" && !this.flushing)
+        throw new Error(`发送状态尚未确认，请先核对收件端。回复 ID：${id}`);
+      await this.flush();
+    }
+    const reply = this.store.reply(id)!;
+    if (reply.status !== "sent")
+      throw new Error(
+        `文件${reply.status === "uncertain" ? "发送结果不明，先核对收件端，不能重复发送" : "未发送成功"}：${reply.error || reply.status}。回复 ID：${id}；不要改用桌面发送。`,
+      );
+    return {
+      status: "sent",
+      name,
+      messageId: reply.file?.messageId,
+      replyId: id,
+    };
+  }
   flush(): Promise<void> {
     if (this.flushing) return this.flushing;
     if (this.stopped || !this.client) return Promise.resolve();
@@ -377,14 +459,48 @@ export class Feishu {
           this.store.replyStatus(item.id, "failed", "缺少原消息关联");
           continue;
         }
+        let sendingMessage = false;
         try {
           this.store.replyStatus(item.id, "sending");
+          if (item.file && !item.file.fileKey) {
+            const bytes = readFileSync(item.file.path);
+            if (
+              createHash("sha256").update(bytes).digest("hex") !==
+              item.file.sha256
+            )
+              throw new Error("待发送文件快照校验失败");
+            const upload = (await client.im.file.create({
+              data: {
+                file_type: "stream",
+                file_name: item.file.name,
+                file: bytes,
+              },
+            })) as any;
+            const key = upload?.file_key || upload?.data?.file_key;
+            if (
+              typeof key !== "string" ||
+              !key ||
+              (upload.code !== undefined && upload.code !== 0)
+            )
+              throw new Error(upload?.msg || "飞书文件上传未返回 file_key");
+            item.file.fileKey = key;
+            this.store.replyFile(item.id, item.file);
+          }
+          if (this.stopped) {
+            this.store.replyStatus(item.id, "pending");
+            break;
+          }
           // Keep the original incoming message as reply target; never reply to the latest chat.
+          sendingMessage = true;
           const response = await client.im.message.reply({
             path: { message_id: item.source.messageId },
             data: {
-              msg_type: "text",
-              content: JSON.stringify({ text: item.text }),
+              msg_type: item.file ? "file" : "text",
+              content: JSON.stringify(
+                item.file
+                  ? { file_key: item.file.fileKey }
+                  : { text: item.text },
+              ),
               uuid: createHash("sha256")
                 .update(item.id)
                 .digest("hex")
@@ -399,11 +515,21 @@ export class Feishu {
             );
             continue;
           }
+          if (item.file) {
+            if (!response.data?.message_id)
+              throw new Error("飞书未返回文件消息 ID，请核对收件端");
+            item.file.messageId = response.data.message_id;
+            this.store.replyFile(item.id, item.file);
+          }
           this.store.replyStatus(item.id, "sent");
           await Bun.sleep(250);
         } catch (error) {
           // A transport error can occur after Feishu accepts the message. Don't resend blindly.
-          this.store.replyStatus(item.id, "uncertain", String(error));
+          this.store.replyStatus(
+            item.id,
+            sendingMessage ? "uncertain" : "failed",
+            String(error),
+          );
         }
       }
     } finally {

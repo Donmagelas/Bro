@@ -8,6 +8,7 @@ import type {
   InputStatus,
   Project,
   Resource,
+  ReplyFile,
   Session,
   Settings,
   Source,
@@ -54,6 +55,11 @@ export class Store {
         status TEXT NOT NULL DEFAULT 'pending', error TEXT, createdAt INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS subscriptions (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       PRAGMA user_version=1;`);
+    const outboxColumns = this.db
+      .query("PRAGMA table_info(outbox)")
+      .all() as Row[];
+    if (!outboxColumns.some((column) => column.name === "file"))
+      this.db.exec("ALTER TABLE outbox ADD COLUMN file TEXT");
     const columns = this.db.query("PRAGMA table_info(sessions)").all() as Row[];
     if (!columns.some((column) => column.name === "model"))
       this.db.exec("ALTER TABLE sessions ADD COLUMN model TEXT");
@@ -634,12 +640,66 @@ export class Store {
         ),
     );
   }
-  pendingReplies(): { id: string; source: Source; text: string }[] {
+  replySource(input: Input): Source {
+    let current = input;
+    for (let depth = 0; current.parentRequestId; depth++) {
+      if (depth >= 8) throw new Error("交办来源层级异常");
+      const d = this.delegation(current.parentRequestId);
+      const origin = d && this.input(d.originInputId);
+      if (
+        !d ||
+        d.targetInputId !== current.id ||
+        d.targetSessionId !== current.sessionId ||
+        !origin ||
+        origin.sessionId !== d.sourceSessionId
+      )
+        throw new Error("无法确认原请求来源");
+      current = origin;
+    }
+    return current.source;
+  }
+  addFileReply(id: string, source: Source, file: ReplyFile) {
+    this.db
+      .query(
+        "INSERT OR IGNORE INTO outbox (id,source,text,file,createdAt) VALUES (?,?,?,?,?)",
+      )
+      .run(id, JSON.stringify(source), "", JSON.stringify(file), Date.now());
+  }
+  reply(id: string) {
+    const row = this.db
+      .query("SELECT * FROM outbox WHERE id=?")
+      .get(id) as Row | null;
+    return row
+      ? {
+          id: row.id as string,
+          status: row.status as string,
+          error: row.error as string | null,
+          source: parse<Source>(row.source),
+          file: row.file ? parse<ReplyFile>(row.file) : undefined,
+        }
+      : null;
+  }
+  replyFile(id: string, file: ReplyFile) {
+    this.db
+      .query("UPDATE outbox SET file=? WHERE id=?")
+      .run(JSON.stringify(file), id);
+  }
+  pendingReplies(): {
+    id: string;
+    source: Source;
+    text: string;
+    file?: ReplyFile;
+  }[] {
     return (
       this.db
         .query("SELECT * FROM outbox WHERE status='pending' ORDER BY createdAt")
         .all() as Row[]
-    ).map((r) => ({ id: r.id, source: parse(r.source), text: r.text }));
+    ).map((r) => ({
+      id: r.id,
+      source: parse(r.source),
+      text: r.text,
+      file: r.file ? parse<ReplyFile>(r.file) : undefined,
+    }));
   }
   replyStatus(id: string, status: string, error?: string) {
     this.db
