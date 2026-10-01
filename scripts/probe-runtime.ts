@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { prepareRoot } from "../packages/platform/paths";
@@ -69,6 +69,17 @@ const provider = Bun.serve({
           },
         };
       else text = "BRO_BROWSER_COMPLETE";
+    } else if (prompt.includes("BRO_ATTACHMENT")) {
+      if (!toolCount)
+        call = {
+          name: "read",
+          args: { path: join(root, "attachments", "probe.md") },
+        };
+      else text = "BRO_ATTACHMENT_READ";
+      if (
+        !prompt.includes(`附件文件：${join(root, "attachments", "probe.md")}`)
+      )
+        throw new Error("Attachment path did not reach the model");
     } else if (prompt.includes("BRO_RESOURCE")) {
       if (toolCount === 0) call = { name: "bro_fixture_greet", args: {} };
       else if (toolCount === 1)
@@ -211,6 +222,49 @@ try {
   for (const proof of ["PLUGIN_EXECUTED", "MCP_EXECUTED", "BRO_SKILL_LOADED"])
     if (!history.includes(proof))
       throw new Error(`Missing real resource result: ${proof}`);
+  const attachmentPath = join(root, "attachments", "probe.md");
+  writeFileSync(attachmentPath, "EXACT_ATTACHMENT_CONTENT");
+  const withFile = host.store.enqueue(
+    source.id,
+    "BRO_ATTACHMENT",
+    { kind: "gui" },
+    {
+      attachments: [
+        { path: attachmentPath, name: "probe.md", mimeType: "text/markdown" },
+      ],
+    },
+  );
+  host.runtimes.wake(source.id);
+  await wait(withFile.id);
+  if (
+    !JSON.stringify(await host.runtimes.history(source.id)).includes(
+      "EXACT_ATTACHMENT_CONTENT",
+    )
+  )
+    throw new Error("Runtime did not read the supplied attachment");
+  const missingFile = host.store.enqueue(
+    source.id,
+    "BRO_ATTACHMENT",
+    { kind: "gui" },
+    {
+      attachments: [
+        { path: attachmentPath, name: "probe.md", mimeType: "text/markdown" },
+      ],
+    },
+  );
+  rmSync(attachmentPath);
+  const requestsBeforeMissingFile = requests;
+  host.runtimes.wake(source.id);
+  await wait(missingFile.id).catch(() => {});
+  const rejected = host.store.input(missingFile.id)!;
+  if (
+    rejected.status !== "failed" ||
+    !rejected.error?.includes("指定附件") ||
+    requests !== requestsBeforeMissingFile
+  )
+    throw new Error(
+      "Missing attachment was not rejected before model execution",
+    );
   await send(source.id, `BRO_DELEGATE ${target.id}`);
   const start = Date.now();
   while (Date.now() - start < 120000) {
@@ -305,6 +359,7 @@ try {
         "native plugin install + call",
         "native MCP call",
         "explicit Skill read",
+        "exact attachment reaches model and read tool; removed attachment rejected before model execution",
         "separate-process cross-session execution + return",
         "disabled plugin removed at next boundary",
         "shadow/experimental/normal Skill selection through real OMP provider hooks",
